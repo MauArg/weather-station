@@ -13,16 +13,23 @@ _Última actualización: 2026-07-11_
 
 ## Fase actual
 
-Según `Fase_2_ESP32_Solar_Migration.md`: migración NodeMCU ESP8266 → FireBeetle ESP32 + alimentación solar autónoma. Estado documentado: **Diseño**. Objetivo: deep sleep <50µA, 30+ días de autonomía sin mantenimiento.
+Objetivo original según `Fase_2_ESP32_Solar_Migration.md`: migración NodeMCU ESP8266 → FireBeetle ESP32 + alimentación solar autónoma, deep sleep <50µA, 30+ días de autonomía. **Estado real (2026-07-11)**: prototipo (dos perfboards, no PCB definitivo) ya desplegado y funcionando al aire libre en la ubicación de campo — ver `weather-station-station-iot/componentes_y_conexiones.md` → "Estado actual en campo". El documento de Fase 2 quedó desactualizado como plan; se conserva como referencia de objetivos.
 
-## Issue abierto: bus I2C bloqueado (sin resolver)
+## Issue abierto: fallas I2C intermitentes (baja severidad, causa identificada)
 
-Ver `i2c-bus-lockup-investigation.md`. Todos los sensores I2C (SHT31, BMP085, ambos INA219) fallan simultáneamente desde el primer boot, incluso sin ciclo de deep sleep previo — descarta causa puramente de firmware. Hipótesis principal: el **AS5600** (veleta, conectado en JST5, no inicializado aún en firmware) puede estar tirando SDA a bajo por un problema físico de conexión o daño estático. Próximo paso de diagnóstico: desconectar JST5 con el nodo activo y ver si el bus I2C se recupera.
+**Actualizado 2026-07-11** — causa real: cold solder joints en las dos perfboards del prototipo (no el AS5600, que nunca se conectó — ver `i2c-bus-lockup-investigation.md` para la corrección de la hipótesis original). Resoldar varias juntas mejoró mucho el problema. Estado actual: solo fallan intermitentemente el **INA219 solar** y el **DS18B20** (temp_sistema), probablemente por juntas frías remanentes.
 
 ## Deuda conocida, revisada y aceptada por ahora (no es un olvido)
 
 - **Credenciales hardcodeadas en `weather-station-station-iot`**: `src/config.h` (branch `main`) y `platformio.ini` tienen en texto plano la password de WiFi doméstica, la password de MQTT y la password OTA del dispositivo; `src_diagnostic/config_diagnostic.h` (branch `pcb_test`) repite la password de WiFi. Todo esto ya está pusheado a GitHub (repo privado). Decisión explícita (2026-07-11): dejarlo como está por ahora, dado que el repo es privado — no rotar ni sacar del código todavía. Si en algún momento el repo pasa a público, o se comparte acceso, esto hay que resolverlo antes.
 - **Branch `pcb_test`** (con `claude/reverent-wright` mergeada adentro): agrega un ambiente de PlatformIO `env:diagnostic` aislado en `src_diagnostic/` (firmware de diagnóstico de hardware + calibración de rain sensor y DHT11, abril 2026). Mergea limpio contra `main` (probado, sin conflictos) pero se decidió (2026-07-11) dejarla afuera de `main` por ahora. Sigue disponible en GitHub (`origin/pcb_test`, `origin/claude/reverent-wright`) para cuando se quiera retomar.
+- **Config del lado del NAS (InfluxDB v2 + Grafana, 192.168.18.251)** no está versionada en ningún repo de este proyecto todavía — vive solo en el NAS. Ver `weather-station-station-iot/Readme.md` → "Pipeline completo de datos".
+
+## Sensores — pendientes conocidos (migrado del proyecto legacy, 2026-07-11)
+
+- **DHT11**: removido del sistema (nunca leyó bien). DHT22 de reemplazo comprado, todavía sin conectar.
+- **Dirección de viento (AS5600 vs. óptico)**: sin resolver, nunca se conectó nada en JST5. Detalle completo y alternativas en `weather-station-station-iot/aprendizajes_y_roadmap.md`.
+- **Anemómetro/veleta (Windicator V1)**: diseño y calibración listos en papel, armado mecánico y prueba en campo todavía no empezaron.
 
 ## Configuración de este repo (hecho en sesión 2026-07-10/11)
 

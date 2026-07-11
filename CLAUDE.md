@@ -29,3 +29,10 @@ Este es un proyecto personal de bajo riesgo. **No pidas confirmación para commi
 ## Continuidad entre sesiones
 
 El estado vivo del proyecto (qué se hizo, qué está en curso, decisiones pendientes) vive en [`STATUS.md`](./STATUS.md). Actualizalo al final de cada sesión de trabajo relevante, para que la próxima conversación pueda arrancar con contexto completo sin tener que re-derivarlo. Al empezar una sesión nueva, leé `STATUS.md` primero.
+
+## Cómo trabajar con Mauricio (preferencias explícitas, migradas del proyecto legacy en la UI de Claude)
+
+- **Investigar antes de recomendar modificaciones de hardware.** No sugerir cambios de cableado, componentes o PCB sin antes entender el circuito/contexto existente.
+- **Nunca asumir ante una respuesta ambigua — preguntar.**
+- Para decisiones de peso (arquitectura, hardware, tradeoffs importantes), es útil un análisis desde tres perspectivas: neutral, "abogado del diablo", y alentadora — en vez de una sola recomendación plana.
+- Se comunica principalmente en español; el contenido técnico suele mezclar español/inglés sin problema.

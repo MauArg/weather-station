@@ -6,6 +6,14 @@
 
 ---
 
+## Actualización (2026-07-11) — causa real identificada
+
+La hipótesis del AS5600 de más abajo quedó **descartada**: el AS5600 nunca se conectó (JST5 sigue vacío), así que no pudo ser la causa. La causa real eran **cold solder joints** en las dos perfboards del primer prototipo — resoldar varias juntas mejoró muchísimo el problema (antes el bus I2C se caía de forma random, afectando INA219 y más sensores). Estado actual: solo fallan intermitentemente el **INA219 solar** y el **DS18B20** (temp_sistema), probablemente por juntas frías remanentes sin resoldar. Ver `weather-station-station-iot/componentes_y_conexiones.md` → "Estado actual en campo" para el detalle vivo.
+
+La investigación original queda abajo tal cual se hizo, como registro de lo descartado y por qué.
+
+---
+
 ## Contexto
 
 En el commit de integración de nuevos sensores (PCB auxiliar) se agregaron:

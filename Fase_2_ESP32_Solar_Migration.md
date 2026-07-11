@@ -8,7 +8,7 @@
 - **Hardware**: Migración de NodeMCU ESP8266 → FireBeetle ESP32
 - **Objetivo**: Transición a alimentación solar 100% autónoma con consumo <50µA en deep sleep
 - **Prerequisitos**: Fase 1 completada exitosamente (7 días uptime, consumo documentado)
-- **Estado**: Diseño
+- **Estado**: Prototipo desplegado en campo (perfboard, no PCB definitivo) — ver `weather-station-station-iot/componentes_y_conexiones.md` → "Estado actual en campo" para el detalle vigente (actualizado 2026-07-11; este documento de fase quedó desactualizado como plan, se conserva como referencia de objetivos originales)
 
 ---
 
