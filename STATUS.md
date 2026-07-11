@@ -19,10 +19,6 @@ Según `Fase_2_ESP32_Solar_Migration.md`: migración NodeMCU ESP8266 → FireBee
 
 Ver `i2c-bus-lockup-investigation.md`. Todos los sensores I2C (SHT31, BMP085, ambos INA219) fallan simultáneamente desde el primer boot, incluso sin ciclo de deep sleep previo — descarta causa puramente de firmware. Hipótesis principal: el **AS5600** (veleta, conectado en JST5, no inicializado aún en firmware) puede estar tirando SDA a bajo por un problema físico de conexión o daño estático. Próximo paso de diagnóstico: desconectar JST5 con el nodo activo y ver si el bus I2C se recupera.
 
-## Pendiente manual (no lo puedo hacer yo)
-
-- En GitHub, el repo `weather-station-backend-service` todavía tiene `core-logic` como default branch (heredado del primer push). Hay que cambiarlo a `master` en Settings → Branches para poder borrar `origin/core-logic` (ya está mergeado a `master`, no se pierde nada).
-
 ## Deuda conocida, revisada y aceptada por ahora (no es un olvido)
 
 - **Credenciales hardcodeadas en `weather-station-station-iot`**: `src/config.h` (branch `main`) y `platformio.ini` tienen en texto plano la password de WiFi doméstica, la password de MQTT y la password OTA del dispositivo; `src_diagnostic/config_diagnostic.h` (branch `pcb_test`) repite la password de WiFi. Todo esto ya está pusheado a GitHub (repo privado). Decisión explícita (2026-07-11): dejarlo como está por ahora, dado que el repo es privado — no rotar ni sacar del código todavía. Si en algún momento el repo pasa a público, o se comparte acceso, esto hay que resolverlo antes.
