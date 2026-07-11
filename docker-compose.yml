@@ -6,7 +6,7 @@ services:
     ports:
       - "8080:8080"
     env_file:
-      - ./backend-service/.env
+      - ./weather-station-backend-service/.env
 
   frontend:
     image: maulpdocker/weather-station:frontend
