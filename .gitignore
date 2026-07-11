@@ -1,0 +1,15 @@
+# Repos secondary con historial y remote propios (no se anidan como submodule, se ignoran)
+/backend-service/
+/frontend-dashboard/
+/station-iot/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+*.swp
+
+# Local env
+.env
+.env.local
