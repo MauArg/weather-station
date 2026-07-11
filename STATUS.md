@@ -21,7 +21,12 @@ Ver `i2c-bus-lockup-investigation.md`. Todos los sensores I2C (SHT31, BMP085, am
 
 ## Pendiente manual (no lo puedo hacer yo)
 
-- En GitHub, el repo `weather-station-frontend-dashboard` todavía tiene `bugfix` como default branch (heredado del primer push). Hay que cambiarlo a `master` en Settings → Branches para poder borrar `origin/bugfix` (ya está mergeado a `master`, no se pierde nada).
+- En GitHub, el repo `weather-station-backend-service` todavía tiene `core-logic` como default branch (heredado del primer push). Hay que cambiarlo a `master` en Settings → Branches para poder borrar `origin/core-logic` (ya está mergeado a `master`, no se pierde nada).
+
+## Deuda conocida, revisada y aceptada por ahora (no es un olvido)
+
+- **Credenciales hardcodeadas en `weather-station-station-iot`**: `src/config.h` (branch `main`) y `platformio.ini` tienen en texto plano la password de WiFi doméstica, la password de MQTT y la password OTA del dispositivo; `src_diagnostic/config_diagnostic.h` (branch `pcb_test`) repite la password de WiFi. Todo esto ya está pusheado a GitHub (repo privado). Decisión explícita (2026-07-11): dejarlo como está por ahora, dado que el repo es privado — no rotar ni sacar del código todavía. Si en algún momento el repo pasa a público, o se comparte acceso, esto hay que resolverlo antes.
+- **Branch `pcb_test`** (con `claude/reverent-wright` mergeada adentro): agrega un ambiente de PlatformIO `env:diagnostic` aislado en `src_diagnostic/` (firmware de diagnóstico de hardware + calibración de rain sensor y DHT11, abril 2026). Mergea limpio contra `main` (probado, sin conflictos) pero se decidió (2026-07-11) dejarla afuera de `main` por ahora. Sigue disponible en GitHub (`origin/pcb_test`, `origin/claude/reverent-wright`) para cuando se quiera retomar.
 
 ## Configuración de este repo (hecho en sesión 2026-07-10/11)
 
@@ -29,6 +34,7 @@ Ver `i2c-bus-lockup-investigation.md`. Todos los sensores I2C (SHT31, BMP085, am
 - Topología definida: este repo es **main** (docs transversales, deploy), `weather-station-backend-service/` `weather-station-frontend-dashboard/` `weather-station-station-iot/` son **secondary** independientes (ignorados por `.gitignore` acá, no son submodules).
 - Política de auto-commit + auto-push activada (ver `CLAUDE.md`) — sin necesidad de confirmación manual, dado que es un proyecto personal de bajo riesgo.
 - Los 4 repos están pusheados a GitHub (cuenta personal `MauArg`, privados): `weather-station`, `weather-station-backend-service`, `weather-station-frontend-dashboard`, `weather-station-station-iot`, conectados vía el alias SSH `github-personal`.
-- `weather-station-frontend-dashboard`: ramas redundantes `dockerization`/`integration`/`bugfix` mergeadas a `master` y borradas (local + remoto, salvo `bugfix` — ver pendiente manual arriba).
 - Se commiteó el trabajo pendiente de `weather-station-station-iot` (PCB Aux v1.2.2 actualizado, nuevas iteraciones Main PCB v1.3/v1.4, `componentes_y_conexiones.md`).
 - `PCB/` de la raíz se consolidó dentro de `weather-station-station-iot/PCB/` — ya no hay diseño de hardware duplicado entre repos; `weather-station-station-iot/` es ahora la única fuente para todo lo de hardware.
+- Se arregló un `env_file` roto en el `docker-compose.yml` raíz (seguía apuntando a `./backend-service/.env` tras el renombrado de carpeta).
+- Limpieza de branches ya mergeadas a la rama principal, local y remoto: `weather-station-frontend-dashboard` (`dockerization`, `integration`, `bugfix`), `weather-station-backend-service` (`dockerization`; falta `core-logic`, ver pendiente manual), `weather-station-station-iot` (`DHT11-fix`, `add-rssi-value`, `nuevos_sensores`, `rain-pulsed-signal`, `rain-value`, `claude/friendly-euler`). También se podó un worktree de git huérfano en `weather-station-station-iot` (metadata vieja de antes del renombre de carpeta, sin datos reales).
