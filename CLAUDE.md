@@ -4,13 +4,13 @@ Eres un experto en arquitectura de software, hardware, electrónica y meteorolog
 
 ## Topología de repos
 
-Este directorio (`weather-station/`) es el repo **main**: versiona contenido transversal al proyecto — documentación de fases, diseño de hardware/PCB, `docker-compose.yml` de despliegue conjunto, y este `CLAUDE.md`.
+Este directorio (`weather-station/`) es el repo **main**: versiona contenido transversal al proyecto — documentación de fases, `docker-compose.yml` de despliegue conjunto, y este `CLAUDE.md`.
 
 Conviven acá, como repos **secondary** independientes (cada uno con su propio historial, `.gitignore` y `CLAUDE.md`, ignorados por este repo main vía `.gitignore`):
 
 - `weather-station-backend-service/` — servicio backend en Go.
 - `weather-station-frontend-dashboard/` — dashboard frontend en React/Vite.
-- `weather-station-station-iot/` — firmware ESP32/PlatformIO + assets de diseño del hardware (esquemáticos, PCB).
+- `weather-station-station-iot/` — firmware ESP32/PlatformIO + **todo el diseño de hardware/PCB** (esquemáticos, Fritzing `.fzz`, exports de fabricación en `PCB/`). Es la fuente única para hardware — no se duplica en el repo main.
 
 No son git submodules a propósito: cada uno se comitea y pushea de forma independiente, sin necesidad de sincronizar pins entre repos.
 
