@@ -13,7 +13,9 @@ _Última actualización: 2026-07-11_
 
 ## Fase actual
 
-Objetivo original según `Fase_2_ESP32_Solar_Migration.md`: migración NodeMCU ESP8266 → FireBeetle ESP32 + alimentación solar autónoma, deep sleep <50µA, 30+ días de autonomía. **Estado real (2026-07-11)**: prototipo (dos perfboards, no PCB definitivo) ya desplegado y funcionando al aire libre en la ubicación de campo — ver `weather-station-station-iot/componentes_y_conexiones.md` → "Estado actual en campo". El documento de Fase 2 quedó desactualizado como plan; se conserva como referencia de objetivos.
+Objetivo original según `Fase_2_ESP32_Solar_Migration.md`: migración NodeMCU ESP8266 → FireBeetle ESP32 + alimentación solar autónoma, deep sleep <50µA, 30+ días de autonomía. **Estado real (2026-07-11)**: prototipo v1 (dos perfboards, con cold solder joints) desplegado y funcionando al aire libre en la ubicación de campo — ver `weather-station-station-iot/componentes_y_conexiones.md` → "Estado actual en campo". El documento de Fase 2 quedó desactualizado como plan; se conserva como referencia de objetivos.
+
+**En curso**: PCB v2 definitiva (FR4 casera, transferencia de tóner + cloruro férrico, main + aux) para reemplazar el prototipo y resolver los cold solder joints — perforada, soldadura en curso, sin terminar. Ver `weather-station-station-iot/componentes_y_conexiones.md` → "PCB v2 — en fabricación".
 
 ## Issue abierto: fallas I2C intermitentes (baja severidad, causa identificada)
 
