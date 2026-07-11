@@ -8,9 +8,9 @@ Este directorio (`weather-station/`) es el repo **main**: versiona contenido tra
 
 Conviven acá, como repos **secondary** independientes (cada uno con su propio historial, `.gitignore` y `CLAUDE.md`, ignorados por este repo main vía `.gitignore`):
 
-- `backend-service/` — servicio backend en Go.
-- `frontend-dashboard/` — dashboard frontend en React/Vite.
-- `station-iot/` — firmware ESP32/PlatformIO + assets de diseño del hardware (esquemáticos, PCB).
+- `weather-station-backend-service/` — servicio backend en Go.
+- `weather-station-frontend-dashboard/` — dashboard frontend en React/Vite.
+- `weather-station-station-iot/` — firmware ESP32/PlatformIO + assets de diseño del hardware (esquemáticos, PCB).
 
 No son git submodules a propósito: cada uno se comitea y pushea de forma independiente, sin necesidad de sincronizar pins entre repos.
 

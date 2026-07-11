@@ -1,7 +1,7 @@
 # Repos secondary con historial y remote propios (no se anidan como submodule, se ignoran)
-/backend-service/
-/frontend-dashboard/
-/station-iot/
+/weather-station-backend-service/
+/weather-station-frontend-dashboard/
+/weather-station-station-iot/
 
 # OS / editor
 .DS_Store
