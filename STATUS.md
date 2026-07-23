@@ -34,9 +34,15 @@ Si se retoma, tener en cuenta:
 - Lo que resolvería: mapeo pin-de-símbolo ↔ pad-de-footprint explícito y verificable con cross-probe, visor 3D para confirmar orientación real del TO-92 sobre el pad, y export para toner transfer con control de espejado explícito por capa.
 - Lo que **no** desaparece: el TO-92 tiene varios footprints en la librería de KiCad con distinto orden de pin 1 y distinta convención de panza. Hay que elegir el que corresponda al BC337 real (C-B-E con plano de frente) y verificar pad→net antes de rutear.
 
-## Issue abierto: fallas I2C intermitentes (baja severidad, causa identificada)
+## Issue de fallas I2C intermitentes — resuelto por la PCB v2 (confirmación final pendiente)
 
-**Actualizado 2026-07-11** — causa real: cold solder joints en las dos perfboards del prototipo (no el AS5600, que nunca se conectó — ver `i2c-bus-lockup-investigation.md` para la corrección de la hipótesis original). Resoldar varias juntas mejoró mucho el problema. Estado actual: solo fallan intermitentemente el **INA219 solar** y el **DS18B20** (temp_sistema), probablemente por juntas frías remanentes.
+**Actualizado 2026-07-23** — la causa real eran cold solder joints en las dos perfboards del prototipo (no el AS5600, que nunca se conectó — ver `i2c-bus-lockup-investigation.md` para la corrección de la hipótesis original). Los dos intermitentes remanentes eran el **INA219 solar** y el **DS18B20** (temp_sistema).
+
+Al reemplazar las perfboards por la PCB v2, el nodo arrancó a la primera y viene **totalmente estable**, incluidos esos dos sensores. Como el prototipo con las juntas frías ya no está en servicio, el issue se considera resuelto.
+
+Confirmación final pendiente: prueba de ~19h en la caja estanca (2026-07-23 17:00 → 2026-07-24 mediodía), elegida para cubrir la madrugada con temperaturas bajo cero — el ciclo térmico es lo que expone una junta marginal. Si pasa limpia, el issue queda cerrado y se aplica el barniz protector.
+
+**Anterior (2026-07-11)**: resoldar varias juntas del prototipo mejoró mucho el problema pero no lo eliminó.
 
 ## Deuda conocida, revisada y aceptada por ahora (no es un olvido)
 
