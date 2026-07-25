@@ -13,3 +13,6 @@ desktop.ini
 # Local env
 .env
 .env.local
+
+# Banco de pruebas throwaway (Arduino Mega, no es parte del firmware del nodo)
+/bench-veleta-anemometro/
