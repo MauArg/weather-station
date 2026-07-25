@@ -2,7 +2,7 @@
 
 > Actualizar este archivo al final de cada sesión de trabajo relevante. Es el punto de partida para la siguiente conversación — ver política en [`CLAUDE.md`](./CLAUDE.md).
 
-_Última actualización: 2026-07-23_
+_Última actualización: 2026-07-25_
 
 ## Arquitectura
 
@@ -52,7 +52,14 @@ Confirmación final pendiente: prueba de ~19h en la caja estanca (2026-07-23 17:
 
 ## Sensores — pendientes conocidos (migrado del proyecto legacy, 2026-07-11)
 
-- **DHT11**: removido del sistema (nunca leyó bien). DHT22 de reemplazo comprado, todavía sin conectar.
+- **DHT11 → DHT22 — reemplazo físico completado, falta firmware (2026-07-25).** El DHT11 murió (falla crónica, venía fallando ya en proyectos anteriores — no fue un problema del circuito/Rail B). Mau desoldó el DHT11 del módulo Sunfounder y soldó en su lugar el DHT22 pelado que había comprado, reutilizando el PCB del módulo: mismo pull-up y filtro ya incluidos ahí, mismo orden de pines VDD-DATA-NC-GND y mismo paso de 2.54mm que el DHT11 (confirmado por datasheet antes de tocarlo), mismo conector JST y pin GPIO0 de la placa principal — **sin cambios de cableado ni de PCB**. Documentado con fotos antes/después del desoldado. Detalle en `weather-station-station-iot/componentes_y_conexiones.md` → "Reemplazado, pendiente de firmware".
+  **Pendiente — próxima sesión de firmware**, todo en `weather-station-station-iot/`:
+  - `src/sensors.cpp:7` — descomentar `#include <DHT.h>`.
+  - `src/sensors.cpp:20` — descomentar el constructor y cambiar el tipo: `DHT _dht(PIN_DHT11, DHT22);` (segundo argumento es el tipo para la librería `adafruit/DHT sensor library`, ya está en `platformio.ini:33`).
+  - `src/sensors.cpp:45-46` y `173-204` — descomentar el warmup y el bloque de lectura (`DHT_WARMUP_MS` ya está en 2000ms, conservador de sobra para DHT22 — no hace falta tocarlo).
+  - `src/config.h:82` — descomentar `PIN_DHT11` (GPIO0, sin cambios de pin).
+  - `src/config.h:104-107` — **sacar** las constantes de calibración de humedad (`DHT_HUM_RAW_LO/HI`, `DHT_HUM_REAL_LO/HI`): eran una corrección empírica del sesgo del DHT11 defectuoso, no aplican al DHT22 nuevo.
+  - Cosmético, opcional: los campos `dht11_temp_c`/`dht11_hum_pct`/`dht11_ok` en `src/sensors.h:25-27` quedan con nombre desactualizado (siguen siendo funcionalmente correctos).
 - **Dirección de viento (AS5600 vs. óptico)**: sin resolver, nunca se conectó nada en JST5. Detalle completo y alternativas en `weather-station-station-iot/aprendizajes_y_roadmap.md`.
 - **Anemómetro/veleta (Windicator V1)**: diseño y calibración listos en papel, armado mecánico y prueba en campo todavía no empezaron.
 
