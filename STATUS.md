@@ -2,7 +2,34 @@
 
 > Actualizar este archivo al final de cada sesión de trabajo relevante. Es el punto de partida para la siguiente conversación — ver política en [`CLAUDE.md`](./CLAUDE.md).
 
-_Última actualización: 2026-07-25_
+_Última actualización: 2026-07-26_
+
+## Vista de service mode en la UI (2026-07-26)
+
+El flujo de OTA ya no requiere SSH a la Pi. Antes era: `mosquitto_pub` del comando `maintenance` por SSH → una ventana de `cmd` haciendo ping para adivinar cuándo despertaba el nodo → `pio run -t upload` → otro `mosquitto_pub` con payload vacío para desarmar. Ahora hay una vista dedicada en el dashboard.
+
+**Hallazgo que simplificó el diseño**: el ping era innecesario desde siempre. El firmware ya publica en `station/01/status` un `service_mode_active` al entrar (con ArduinoOTA ya levantado) y un `service_mode_alive` cada 30 s con `remaining_sec`. Y como `_publishStatus` incluye `firmware`, el status que el nodo publica al re-entrar tras el reinicio del OTA trae la **versión nueva** — o sea la UI verifica el flash sola, sin esperar al próximo ciclo de telemetría.
+
+**Arquitectura**: el backend Go es el único cliente MQTT (`internal/mqttbridge/`), mantiene el estado en memoria y lo empuja al browser por SSE. Se descartó conectar el browser directo a Mosquitto por WebSockets porque obligaría a poner las credenciales MQTT en el bundle del cliente. Endpoints nuevos bajo `/api/v1/service/`: `state`, `stream` (SSE), `command`, `battery-trend`.
+
+**Qué tiene la vista**: wizard de OTA cuyo paso se *deriva* del estado real del nodo (no un stepper manual, así no puede desincronizarse), banner global de comando retenido — el chequeo "¿me olvidé el nodo armado?" —, visor de payloads en vivo con filtro por topic y export NDJSON, chips por sensor, medidor de bytes del payload contra el buffer, badge de alerta si corre un build `-dev`, detector de huecos en `boot_count`, consola de comandos y panel de batería.
+
+**Batería**: el semáforo de riesgo de flasheo (🟢 ≥4.00 V · 🟡 3.85–4.00 V · 🔴 <3.85 V) es más estricto que los tiers de `componentes_y_conexiones.md` a propósito — service mode mantiene el nodo despierto sin deep sleep que permita recuperar tensión, y el boost tira más corriente de entrada a medida que baja Vin. El modo de falla que se evita es el brownout a mitad de escritura, no quedarse sin capacidad (15 min a ~100 mA son ~25 mAh de 1500). Incluye sparkline de 24 h/72 h/7 d, porque "varios días nublados" es un problema de tendencia invisible en el valor instantáneo.
+
+**Cambios de firmware** (compilan limpio en `production` y `development`, todavía **sin flashear**):
+- `sensors_initSystemMonitor()` / `sensors_readSystemVoltage()` en `sensors.{h,cpp}` — inicializan y leen solo el INA219 de sistema (0x40), sin encender Rail A ni Rail B. Verificado en la tabla de pines que los INA219 cuelgan del bus I2C siempre alimentado.
+- `service_mode.cpp` publica `system_v` en cada heartbeat. Sin esto la UI quedaba ciega a la batería justo durante la sesión, que es cuando el nodo está drenando — `sensors_init()` no corre en service mode.
+- **Bug corregido en `main.cpp`: el comando `reboot` dejaba el nodo en loop de reinicio.** Reiniciaba sin limpiar el topic retenido, así que al despertar leía el mismo `{"cmd":"reboot"}` y volvía a reiniciar, indefinidamente, hasta agotar la batería. `PING` sí limpiaba y `MAINTENANCE` limpia al salir de service mode; `REBOOT` no tenía salida. Ahora limpia antes de `ESP.restart()`. El backend además limpia el retenido apenas ve el `{"state":"rebooting"}`, como segunda línea de defensa. Nunca se disparó en campo porque el comando `reboot` no se usó nunca por fuera de pruebas.
+
+**Bugs de backend corregidos de paso**: `BatteryType` estaba hardcodeado en `"18650 Li-ion"` cuando la batería real es una LiPo 1500 mAh, y el SoC era lineal 3.2–4.2 V. La curva Li-ion es muy plana entre 3.7 y 4.0 V, así que el cálculo lineal sobreestimaba justo en la zona de decisión (a 3.70 V daba 50% contra un ~33% real). Ahora hay una curva por tramos en `internal/battery/`, compartida entre el dashboard y la vista de service mode.
+
+### Pendiente que destapó la herramienta: ~17% de ciclos sin telemetría
+
+El detector de huecos de `boot_count` mostró, apenas se encendió, que el nodo **pierde alrededor del 17% de los payloads**. Verificado de forma independiente contra InfluxDB (que se alimenta por N8N, otro camino): en una ventana de 45 min, 7 de 42 boots no dejaron telemetría — mismos `boot_count`, mismos timestamps que los que detectó el bridge nuevo. No es un artefacto del código nuevo.
+
+`boot_count` incrementa al principio de `setup()`, antes de la red, así que un hueco significa que el nodo despertó pero salió por `if (!connectWiFi())` o `if (!connectMQTT())` sin publicar. Descartado que sea overflow del buffer MQTT: los payloads miden 485–490 B contra 741 útiles. RSSI ronda -67/-68 dBm.
+
+Importa por energía, no solo por datos: un ciclo que falla la conexión puede quemar hasta 45 s despierto (`WIFI_MAX_RETRIES` 3 × `WIFI_TIMEOUT_MS` 15 s) a 50-140 mA, contra los ~10 s de un ciclo exitoso. Sin diagnosticar todavía — con `LOG_LEVEL=0` en campo no se puede distinguir si falla WiFi o MQTT.
 
 ## Arquitectura
 
