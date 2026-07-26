@@ -45,6 +45,11 @@ Verificado con una instancia de backend apuntada a `station/99` para no tocar el
 
 **Bugs de backend corregidos de paso**: `BatteryType` estaba hardcodeado en `"18650 Li-ion"` cuando la batería real es una LiPo 1500 mAh, y el SoC era lineal 3.2–4.2 V. La curva Li-ion es muy plana entre 3.7 y 4.0 V, así que el cálculo lineal sobreestimaba justo en la zona de decisión (a 3.70 V daba 50% contra un ~33% real). Ahora hay una curva por tramos en `internal/battery/`, compartida entre el dashboard y la vista de service mode.
 
+### Flaggeado en la revisión de firmware, para otra sesión (no bloquea el flasheo)
+
+- **`waitForRetainedCommand()` paga 800 ms fijos en casi todos los ciclos.** El loop espera hasta `MQTT_RETAINED_WAIT_MS` a que llegue un retenido, y sale antes solo si efectivamente hay uno — o sea que la mayoría de los ciclos, que no tienen comando, esperan los 800 ms completos despiertos a 50-140 mA. Sobre un tiempo despierto de ~10 s es ~8%, del orden de 30 mAh/día sobre un pack de 1500. **No tocado a propósito**: acortarlo es un tradeoff, no una mejora gratis. El broker manda los retenidos apenas responde el SUBACK y `PubSubClient::subscribe()` no espera confirmación, así que un margen demasiado corto haría que el nodo se **pierda** comandos de mantenimiento — que es bastante peor que el costo energético. Medir el tiempo real hasta el primer retenido antes de bajarlo.
+- **`system_mW` no es consumo real** y el `delay(2000)` de `LOG_LEVEL>0` — ya documentados más arriba y en `componentes_y_conexiones.md`.
+
 ### Pendiente que destapó la herramienta: ~17% de ciclos sin telemetría
 
 El detector de huecos de `boot_count` mostró, apenas se encendió, que el nodo **pierde alrededor del 17% de los payloads**. Verificado de forma independiente contra InfluxDB (que se alimenta por N8N, otro camino): en una ventana de 45 min, 7 de 42 boots no dejaron telemetría — mismos `boot_count`, mismos timestamps que los que detectó el bridge nuevo. No es un artefacto del código nuevo.
