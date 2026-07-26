@@ -29,7 +29,9 @@ El detector de huecos de `boot_count` mostró, apenas se encendió, que el nodo 
 
 `boot_count` incrementa al principio de `setup()`, antes de la red, así que un hueco significa que el nodo despertó pero salió por `if (!connectWiFi())` o `if (!connectMQTT())` sin publicar. Descartado que sea overflow del buffer MQTT: los payloads miden 485–490 B contra 741 útiles. RSSI ronda -67/-68 dBm.
 
-Importa por energía, no solo por datos: un ciclo que falla la conexión puede quemar hasta 45 s despierto (`WIFI_MAX_RETRIES` 3 × `WIFI_TIMEOUT_MS` 15 s) a 50-140 mA, contra los ~10 s de un ciclo exitoso. Sin diagnosticar todavía — con `LOG_LEVEL=0` en campo no se puede distinguir si falla WiFi o MQTT.
+Importa por energía, no solo por datos: un ciclo que falla la conexión puede quemar hasta 45 s despierto (`WIFI_MAX_RETRIES` 3 × `WIFI_TIMEOUT_MS` 15 s) a 50-140 mA, contra los ~10 s de un ciclo exitoso. Con `LOG_LEVEL=0` en campo no se puede distinguir si falla WiFi o MQTT.
+
+**Hipótesis de Mau (2026-07-26): es señal WiFi marginal en la ubicación de campo.** Ya lo había notado antes de que la herramienta lo cuantificara. En banco no pasa — el router está cerca —, pero en el fondo la señal llega justa. Consistente con el RSSI de -65/-68 dBm medido. **Tema diferido a otra sesión**, no está en curso.
 
 ## Arquitectura
 
