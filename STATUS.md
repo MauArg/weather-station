@@ -21,6 +21,28 @@ El flujo de OTA ya no requiere SSH a la Pi. Antes era: `mosquitto_pub` del coman
 - `service_mode.cpp` publica `system_v` en cada heartbeat. Sin esto la UI quedaba ciega a la batería justo durante la sesión, que es cuando el nodo está drenando — `sensors_init()` no corre en service mode.
 - **Bug corregido en `main.cpp`: el comando `reboot` dejaba el nodo en loop de reinicio.** Reiniciaba sin limpiar el topic retenido, así que al despertar leía el mismo `{"cmd":"reboot"}` y volvía a reiniciar, indefinidamente, hasta agotar la batería. `PING` sí limpiaba y `MAINTENANCE` limpia al salir de service mode; `REBOOT` no tenía salida. Ahora limpia antes de `ESP.restart()`. El backend además limpia el retenido apenas ve el `{"state":"rebooting"}`, como segunda línea de defensa. Nunca se disparó en campo porque el comando `reboot` no se usó nunca por fuera de pruebas.
 
+### Bug grave encontrado probando: el timeout de service mode no acotaba nada
+
+**Detectado 2026-07-26** en una prueba de Mau con `timeout_min: 1`, todavía sobre el firmware `1.1.0`. El log de status mostró tres `service_mode_active` sin ningún `service_mode_ended` entre medio: el nodo no completaba las sesiones, las reiniciaba.
+
+La cadena, en `service_mode.cpp`:
+
+1. Se cae MQTT en medio de la sesión (WiFi flojo — ver la sección de abajo).
+2. El loop hacía `break` sin reintentar, pese a que el log decía "reintentando".
+3. Caía en `serviceMode_exit(..., "mqtt_disconnected")`, que limpia el flag de RTC pero tiene el clear del retenido y el publish del `ended` detrás de un `if (mqtt.connected())` — con el broker caído no hace ninguna de las dos, **en silencio**.
+4. Deep sleep 60 s → despierta → el flag de RTC está en false → flujo normal → lee el `maintenance` que **seguía retenido** → sesión nueva con el timeout entero.
+
+O sea `timeout_min` no acotaba la sesión sino el tiempo entre caídas. Con un enlace que se cae cada 15-45 s el nodo puede quedar en ciclo indefinidamente, despierto a 50-140 mA. En la prueba pasó 3 veces en 4 minutos; con el default de 15 min cada sesión que sobreviva son 15 minutos despierto. Y era invisible: el `remaining_sec` es por sesión, así que la UI mostraba "en service mode" sin que nada se viera raro.
+
+Arreglado en tres capas:
+
+- **Firmware — reconectar en vez de abandonar** (`SERVICE_MODE_MQTT_RETRIES` 5 × 2 s). Al reconectar hay que re-suscribir a `TOPIC_CMD` y reinstalar el callback, si no `cmdCleared` deja de funcionar y el botón de desactivar queda mudo. El callback se sacó a nivel de archivo para poder reinstalarlo.
+- **Firmware — timeout absoluto entre reinicios**. `rtc_serviceStartEpoch` estaba declarado pero nunca se usaba (`_remainingSeconds()` era código muerto, se eliminó); se reemplazó por `rtc_serviceElapsedSec`, que acumula lo consumido. Una re-entrada retoma el saldo en vez de estrenar presupuesto, y el acumulador se pone en cero solo cuando se logró limpiar el retenido, o sea cuando no puede haber re-entrada.
+- **Backend — deadline absoluto de pared** (`runSessionWatchdog`). Limpia el retenido a los `timeout_min` + 2 de gracia contados desde el `issued_at`, sin importar cuántas veces reinicie el nodo. La gracia cubre que el nodo puede tardar hasta un ciclo de sleep en levantar el comando. Se deriva del payload retenido y no de memoria del proceso, así que **sobrevive a un reinicio del backend** — y funciona contra el firmware que hay hoy en campo, sin flashear.
+- **UI** — cuenta los `service_mode_active` por sesión y avisa si son más de uno, más el horario del corte del backend.
+
+Verificado con una instancia de backend apuntada a `station/99` para no tocar el nodo: un comando con `issued_at` viejo se limpió a los 10 s con el motivo logueado, y como control negativo una sesión vigente sobrevivió 50 s sin que el watchdog la cortara. El nodo real siguió publicando normal durante toda la prueba.
+
 **Bugs de backend corregidos de paso**: `BatteryType` estaba hardcodeado en `"18650 Li-ion"` cuando la batería real es una LiPo 1500 mAh, y el SoC era lineal 3.2–4.2 V. La curva Li-ion es muy plana entre 3.7 y 4.0 V, así que el cálculo lineal sobreestimaba justo en la zona de decisión (a 3.70 V daba 50% contra un ~33% real). Ahora hay una curva por tramos en `internal/battery/`, compartida entre el dashboard y la vista de service mode.
 
 ### Pendiente que destapó la herramienta: ~17% de ciclos sin telemetría
