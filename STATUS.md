@@ -2,7 +2,26 @@
 
 > Actualizar este archivo al final de cada sesión de trabajo relevante. Es el punto de partida para la siguiente conversación — ver política en [`CLAUDE.md`](./CLAUDE.md).
 
-_Última actualización: 2026-07-26_
+_Última actualización: 2026-07-28_
+
+## Sistema de logs del nodo — firmware listo, backend y frontend pendientes (2026-07-28)
+
+Diseño completo en [`weather-station-station-iot/logging_system_design.md`](./weather-station-station-iot/logging_system_design.md), que es el contrato para los tres repos. **El firmware está implementado y compila limpio (`1.3.0` / `1.3.0-dev`); backend y frontend todavía no se tocaron.**
+
+**El problema**: el nodo en campo no tiene observabilidad. `LOG_V`/`LOG_E` son `Serial.printf` y con `LOG_LEVEL=0` compilan a no-op, así que la única forma de ver algo es abrir la caja estanca y enchufar USB. El disparador concreto sigue siendo el ~17% de ciclos sin telemetría, donde hoy no se puede saber si falla WiFi o MQTT.
+
+**El modelo**: como el logging de un router comercial —acumula hasta un límite, pisa lo viejo, se consulta— pero **activable a demanda**, porque el nodo cuida cada mA. El operador sabe cuándo lo necesita, igual que sabe cuándo conviene flashear según el SoC.
+
+Decisiones que vale la pena no re-derivar:
+
+- **Capturar es gratis.** Una entry son 8 bytes en RTC memory y escribirla es un `memcpy`. El único costo real es el dump, que es operador-iniciado. Esto invalidó la guarda de batería que se había propuesto en la conversación: partía de suponer que capturar costaba energía.
+- **La captura se mide en horas, no en días.** El ESP32-C3 tiene 8176 B de RTC memory en total y el deep sleep borra todo lo demás. Con 768 entries: ~18 h en nivel 1, ~7,5 h en nivel 2, ~2,5 h en nivel 3. Alcanza de sobra para el caso de uso — a 17% de fallos son ~10 ciclos fallidos por hora. **Medido sobre el ELF**: las secciones RTC terminan en `0x50001850`, o sea 6224 B usados y 1952 B libres.
+- **El nodo es la autoridad del diccionario** código → texto, y manda también las plantillas con `%a`/`%b`, así que define cómo interpretar los argumentos. Un X-macro genera enum, niveles y textos desde una sola definición. El backend cachea por versión de firmware, que ya viaja en todos los payloads. El export a disco tiene que llevar el diccionario adentro, si no un archivo viejo queda ilegible.
+- **No hay timestamps en el nodo** — no tiene reloj y `millis()` se reinicia en cada ciclo. Cada entry lleva `boot_count` + `ms` y el backend reconstruye la hora de pared anclándose en los ciclos que sí publicaron e interpolando los huecos. Precisión honesta: el timer de deep sleep tiene ±5%, así que interpolar 7 ciclos perdidos acumula ~±21 s.
+- **El dump es pull y paginado**, sobre topics propios sin retain (`log/req`, `log/data`), atendido en service mode. Pull porque reintentar una página es el mismo mensaje de siempre, y porque el ack cae solo: el backend tiene todas las páginas → recién ahí manda el clear. **Borrado en dos fases** para que una transferencia incompleta no cueste horas de captura; `keep:true` trae un snapshot sin desactivar.
+- **`esp_reset_reason()` en el evento de boot** distingue brownout de panic de wake normal. Es gratis y hoy no hay forma de saberlo en campo.
+
+**Lo que falta**: backend (reensamblado por páginas, caché persistente del diccionario, reconstrucción de timestamps, endpoints `/api/v1/logs/`) y frontend (panel en la vista de service mode, visor con filtro, export self-contained). Y flashear el `1.3.0` — el nodo corre `1.2.0`.
 
 ## Vista de service mode en la UI (2026-07-26)
 
