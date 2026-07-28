@@ -16,7 +16,11 @@ El flujo de OTA ya no requiere SSH a la Pi. Antes era: `mosquitto_pub` del coman
 
 **Batería**: el semáforo de riesgo de flasheo (🟢 ≥4.00 V · 🟡 3.85–4.00 V · 🔴 <3.85 V) es más estricto que los tiers de `componentes_y_conexiones.md` a propósito — service mode mantiene el nodo despierto sin deep sleep que permita recuperar tensión, y el boost tira más corriente de entrada a medida que baja Vin. El modo de falla que se evita es el brownout a mitad de escritura, no quedarse sin capacidad (15 min a ~100 mA son ~25 mAh de 1500). Incluye sparkline de 24 h/72 h/7 d, porque "varios días nublados" es un problema de tendencia invisible en el valor instantáneo.
 
-**Cambios de firmware — versión `1.2.0` / `1.2.0-dev`** (compilan limpio en `production` y `development`, todavía **sin flashear**). Bump menor: agrega una feature compatible hacia atrás más un bug fix. El string mide lo mismo que `1.1.0`, así que no mueve el tamaño del payload. Mientras el nodo siga reportando `1.1.0`, el OTA todavía no entró:
+**Cambios de firmware — versión `1.2.0` / `1.2.0-dev`.** Bump menor: agrega una feature compatible hacia atrás más un bug fix. El string mide lo mismo que `1.1.0`, así que no mueve el tamaño del payload.
+
+> **Flasheado y corriendo (2026-07-27).** El OTA salió sin problemas y el nodo quedó en `1.2.0` — reportado por Mau, que hizo el flasheo por fuera de una sesión de trabajo. Fue además el estreno en serio de la vista de service mode. Todo lo de abajo está **en campo**, ya no pendiente.
+
+Contenido del `1.2.0`:
 - `sensors_initSystemMonitor()` / `sensors_readSystemVoltage()` en `sensors.{h,cpp}` — inicializan y leen solo el INA219 de sistema (0x40), sin encender Rail A ni Rail B. Verificado en la tabla de pines que los INA219 cuelgan del bus I2C siempre alimentado.
 - `service_mode.cpp` publica `system_v` en cada heartbeat. Sin esto la UI quedaba ciega a la batería justo durante la sesión, que es cuando el nodo está drenando — `sensors_init()` no corre en service mode.
 - **Bug corregido en `main.cpp`: el comando `reboot` dejaba el nodo en loop de reinicio.** Reiniciaba sin limpiar el topic retenido, así que al despertar leía el mismo `{"cmd":"reboot"}` y volvía a reiniciar, indefinidamente, hasta agotar la batería. `PING` sí limpiaba y `MAINTENANCE` limpia al salir de service mode; `REBOOT` no tenía salida. Ahora limpia antes de `ESP.restart()`. El backend además limpia el retenido apenas ve el `{"state":"rebooting"}`, como segunda línea de defensa. Nunca se disparó en campo porque el comando `reboot` no se usó nunca por fuera de pruebas.
@@ -44,6 +48,17 @@ Arreglado en tres capas:
 Verificado con una instancia de backend apuntada a `station/99` para no tocar el nodo: un comando con `issued_at` viejo se limpió a los 10 s con el motivo logueado, y como control negativo una sesión vigente sobrevivió 50 s sin que el watchdog la cortara. El nodo real siguió publicando normal durante toda la prueba.
 
 **Bugs de backend corregidos de paso**: `BatteryType` estaba hardcodeado en `"18650 Li-ion"` cuando la batería real es una LiPo 1500 mAh, y el SoC era lineal 3.2–4.2 V. La curva Li-ion es muy plana entre 3.7 y 4.0 V, así que el cálculo lineal sobreestimaba justo en la zona de decisión (a 3.70 V daba 50% contra un ~33% real). Ahora hay una curva por tramos en `internal/battery/`, compartida entre el dashboard y la vista de service mode.
+
+### Dos pasadas de revisión antes de mandar el OTA
+
+Repaso completo del firmware antes de flashear, en dos tandas (`968bb55` y `d84edf9`). Todo esto entró en el `1.2.0` que hoy corre en campo:
+
+- **Keepalive de MQTT 15 s → 60 s.** El default de `PubSubClient` es 15 s: un solo PINGREQ/PINGRESP perdido tumba la conexión, y en el enlace marginal de campo eso pasa seguido. Es el gatillo más probable de las caídas que cortaban y reiniciaban el service mode. Gratis en el ciclo normal, donde el nodo está despierto ~10 s y el keepalive nunca llega a dispararse.
+- **Socket timeout 15 s → 5 s.** También se pagaba entero cada vez que la conexión fallaba: en el ~17% de ciclos que no publican eran 15 s extra despierto a 50-140 mA por nada. De paso acota `_reconnectMqtt`: peor caso de 5×(15+2)=85 s a 5×(5+2)=35 s.
+- **`timeout_min` negativo rompía el presupuesto por overflow.** `parseCommand` aplicaba techo pero no piso, y el operador `|` de ArduinoJson solo usa el default si la clave falta o es de otro tipo — no si es ≤ 0. Con `{"timeout_min":-5}`, el `(uint32_t)timeoutMin * 60` de `serviceMode_run()` daba una sesión de ~136 años, exactamente lo contrario de lo que el timeout tiene que garantizar. Alcanzable desde la consola de JSON crudo de la UI. Ahora se clampea a `[1, SERVICE_MODE_MAX_TIMEOUT_MIN]`.
+- **El acumulador de tiempo sobrevivía al flasheo.** El reinicio del OTA pasa dentro de `ArduinoOTA.handle()` y nunca pasa por `serviceMode_exit()`, así que `rtc_serviceElapsedSec` conservaba lo consumido antes del flash: si la sesión venía de arrastre, la post-flash nacía sin presupuesto y el nodo se dormía antes de publicar el `service_mode_active` con la versión nueva — que es de donde la UI saca la verificación del OTA. Ahora `onEnd` lo pone en cero.
+- **`CONFIG`, `CALIBRATE` y el caso `default` no limpiaban el retenido** — la misma clase de bug que tenía `REBOOT`. Son stubs, pero alcanzables desde la consola de JSON crudo. Se extrajo `clearRetainedCommand()` y los tres caminos lo usan.
+- **Se eliminó `esp_ota_mark_app_valid_cancel_rollback()` de `ArduinoOTA.onEnd()`** — no hacía lo que decía el comentario. Ver la sección de rollback más abajo.
 
 ### Flaggeado en la revisión de firmware, para otra sesión (no bloquea el flasheo)
 
