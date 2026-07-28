@@ -37,6 +37,16 @@ Decisiones que vale la pena no re-derivar:
 - **El dump es pull y paginado**, sobre topics propios sin retain (`log/req`, `log/data`), atendido en service mode. Pull porque reintentar una página es el mismo mensaje de siempre, y porque el ack cae solo: el backend tiene todas las páginas → recién ahí manda el clear. **Borrado en dos fases** para que una transferencia incompleta no cueste horas de captura; `keep:true` trae un snapshot sin desactivar.
 - **`esp_reset_reason()` en el evento de boot** distingue brownout de panic de wake normal. Es gratis y hoy no hay forma de saberlo en campo.
 
+### Revisión previa al flasheo (2026-07-28) — un hallazgo importante
+
+**La captura no sobrevivía a un reinicio del nodo, y eso era silencioso.** Todo el estado del logging usaba `RTC_DATA_ATTR`, que según `esp_attr.h` conserva el valor *"during a deep sleep / wake cycle"* — no después de un restart. Un panic, un watchdog, una brownout o un comando `reboot` borraban la captura entera **y ponían el nivel en 0**, así que la captura se desarmaba sola y la UI mostraba "Captura detenida" sin explicación. Con una ironía: el `esp_reset_reason()` del evento de boot existe para distinguir brownout de panic, pero esa entry nunca se escribía porque cuando `setup()` la intentaba el nivel ya era 0.
+
+Ahora el estado vive en **`.rtc_noinit`**, validado por `logging_begin()` contra una palabra mágica, la geometría del ring y los invariantes de `head`/`count`/capacidad — `NOINIT` arranca con basura en un power-on, y un `head` con basura escribiría fuera del array, que en RTC memory pisa las variables de al lado. Efecto secundario bienvenido: `.rtc_noinit` es `NOBITS`, así que los 6 KB del ring dejaron de ocupar lugar en la imagen de flash.
+
+Eso creó una frontera nueva que el backend tuvo que aprender: el ring sobrevive pero `rtc_bootCount` no, así que una captura puede traer ciclos de **dos series distintas del contador**. El evento de boot ya lleva el motivo del reset, así que la frontera es detectable (cualquier valor ≠ 8 = `ESP_RST_DEEPSLEEP`); se ancla sólo desde ahí en adelante y lo anterior se entrega sin hora, con una nota. Sin esto darían horas inventadas, que es peor que no tener hora.
+
+Menores corregidos: `LOG_CMD_RX` ahora documenta sus códigos en la plantilla como ya hacía `LOG_SERVICE_EXIT`, y se agregó `LOG_CAPTURE_START` como primera entry de toda captura — sin ella no había forma de saber a qué nivel se capturó mirando el archivo. Aceptado y documentado: **`ms` satura a los 65 s**, lo que afecta a una sola entry por sesión de service mode (la de salida); dar más rango costaría la resolución de milisegundos dentro del ciclo, que es lo que hace útil el diagnóstico de conexión.
+
 **Backend implementado (2026-07-28)** — `go build`, `go vet` y `go test` limpios:
 
 - `internal/mqttbridge/logs.go` — driver de descarga pull, single-flight, borrado en dos fases. Las respuestas tardías a un pedido ya reintentado se descartan en vez de mezclarse con la página en curso.
