@@ -4,6 +4,22 @@
 
 _Última actualización: 2026-07-28_
 
+## ⚠️ Pendiente de acción manual — deploy en la Raspberry Pi 4B
+
+El `docker-compose.yml` de este repo cambió (2026-07-28) y **el server todavía no lo tiene**. Se agregó un volumen `backend-data` montado en `/data` para el cache del diccionario de logs del nodo.
+
+Por qué importa: el diccionario código → texto sólo se puede pedir al nodo, y el nodo sólo conoce el de la versión de firmware que está corriendo **ahora**. Sin el volumen, cada `docker compose pull && up -d` borra el cache y deja ilegible cualquier export de logs de una versión vieja.
+
+Pasos, en orden:
+
+1. **Rebuild y push de la imagen del backend** — el código nuevo del sistema de logs está commiteado pero la imagen `maulpdocker/weather-station:backend` en Docker Hub todavía es la anterior. Sin esto, el paso 3 baja la imagen vieja y no cambia nada.
+2. **`git pull`** en el clon de `weather-station` (repo main) de la Pi, para levantar el `docker-compose.yml` nuevo.
+3. **`docker compose pull && docker compose up -d`**.
+
+No hace falta tocar el `.env` de la Pi: el compose define `LOG_DICT_PATH` en `environment`, que tiene precedencia sobre `env_file`.
+
+Se puede desplegar ya, aunque el frontend no esté: los cambios de backend son compatibles hacia atrás (endpoints nuevos más un campo `logs` en el snapshot de estado) y permiten probar el flujo entero con `curl` contra `/api/v1/logs/`. Ojo que el flujo completo igual necesita el **firmware `1.3.0` flasheado**, que también está pendiente — el nodo corre `1.2.0` y no conoce los topics `log/req` ni `log/data`.
+
 ## Sistema de logs del nodo — firmware listo, backend y frontend pendientes (2026-07-28)
 
 Diseño completo en [`weather-station-station-iot/logging_system_design.md`](./weather-station-station-iot/logging_system_design.md), que es el contrato para los tres repos. **El firmware está implementado y compila limpio (`1.3.0` / `1.3.0-dev`); backend y frontend todavía no se tocaron.**
@@ -21,7 +37,15 @@ Decisiones que vale la pena no re-derivar:
 - **El dump es pull y paginado**, sobre topics propios sin retain (`log/req`, `log/data`), atendido en service mode. Pull porque reintentar una página es el mismo mensaje de siempre, y porque el ack cae solo: el backend tiene todas las páginas → recién ahí manda el clear. **Borrado en dos fases** para que una transferencia incompleta no cueste horas de captura; `keep:true` trae un snapshot sin desactivar.
 - **`esp_reset_reason()` en el evento de boot** distingue brownout de panic de wake normal. Es gratis y hoy no hay forma de saberlo en campo.
 
-**Lo que falta**: backend (reensamblado por páginas, caché persistente del diccionario, reconstrucción de timestamps, endpoints `/api/v1/logs/`) y frontend (panel en la vista de service mode, visor con filtro, export self-contained). Y flashear el `1.3.0` — el nodo corre `1.2.0`.
+**Backend implementado (2026-07-28)** — `go build`, `go vet` y `go test` limpios:
+
+- `internal/mqttbridge/logs.go` — driver de descarga pull, single-flight, borrado en dos fases. Las respuestas tardías a un pedido ya reintentado se descartan en vez de mezclarse con la página en curso.
+- `internal/logdict/` — cache persistente del diccionario por versión de firmware, escritura por temporal + rename. **Necesita el volumen del compose** (ver el pendiente de deploy arriba).
+- `internal/logdecode/` — des-truncado del `boot_count` de 16 bits por diferencia con signo, y reconstrucción de hora de pared. **La interpolación usa el tiempo despierto real**, que está en el propio log, en vez de un período fijo: un ciclo que agota los reintentos de WiFi queda despierto 45 s contra ~9 s de uno sano, y asumir un período fijo erraría por mucho justo en las rachas de fallos que se investigan. Cada entry declara si su hora es anclada o interpolada. Con tests.
+- Anclas temporales en el bridge, descartadas enteras si `boot_count` retrocede — un reflash reinicia el contador y mezclar dos vidas del mismo número daría horas sin sentido.
+- Endpoints `POST /api/v1/logs/fetch`, `GET /api/v1/logs/capture` y `capture.ndjson`. La activación no tiene endpoint propio: va por `/service/command` con `cmd=log_on`, porque es un comando más sobre el topic retenido.
+
+**Lo que falta**: frontend (panel en la vista de service mode, visor con filtro, export self-contained), el deploy en la Pi (arriba) y flashear el `1.3.0` — el nodo corre `1.2.0`.
 
 ## Vista de service mode en la UI (2026-07-26)
 

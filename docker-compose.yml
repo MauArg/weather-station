@@ -7,6 +7,25 @@ services:
       - "8080:8080"
     env_file:
       - ./weather-station-backend-service/.env
+    environment:
+      # Ruta absoluta y explícita, pisando el default relativo del código
+      # (`./data/logdict.json`, que depende del WORKDIR del Dockerfile). Así el
+      # punto de montaje de abajo no se despega del lugar donde el binario
+      # realmente escribe si algún día cambia el WORKDIR.
+      #
+      # `environment` gana sobre `env_file`, así que esto manda aunque el .env
+      # traiga su propio LOG_DICT_PATH.
+      - LOG_DICT_PATH=/data/logdict.json
+    volumes:
+      # Cache del diccionario de códigos de log del nodo, indexado por versión de
+      # firmware. Necesita sobrevivir a los redeploys: sin esto, cada `docker
+      # compose pull && up -d` deja ilegible cualquier export de logs de una
+      # versión de firmware que el nodo ya no corre — el diccionario sólo se puede
+      # volver a pedir al nodo, y el nodo sólo conoce el de la versión que está
+      # corriendo ahora.
+      #
+      # Para mirarlo: docker compose exec backend cat /data/logdict.json
+      - backend-data:/data
 
   frontend:
     image: maulpdocker/weather-station:frontend
@@ -16,3 +35,9 @@ services:
       - "80:80"
     depends_on:
       - backend
+
+volumes:
+  # Estado de runtime del backend. Se repuebla solo pidiéndoselo al nodo, así que
+  # perderlo no es grave — pero `docker compose down -v` lo borra, y ahí se van
+  # los diccionarios de versiones viejas que ya no se pueden recuperar.
+  backend-data:
