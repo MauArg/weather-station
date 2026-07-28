@@ -45,7 +45,11 @@ Decisiones que vale la pena no re-derivar:
 - Anclas temporales en el bridge, descartadas enteras si `boot_count` retrocede — un reflash reinicia el contador y mezclar dos vidas del mismo número daría horas sin sentido.
 - Endpoints `POST /api/v1/logs/fetch`, `GET /api/v1/logs/capture` y `capture.ndjson`. La activación no tiene endpoint propio: va por `/service/command` con `cmd=log_on`, porque es un comando más sobre el topic retenido.
 
-**Lo que falta**: frontend (panel en la vista de service mode, visor con filtro, export self-contained), el deploy en la Pi (arriba) y flashear el `1.3.0` — el nodo corre `1.2.0`.
+**Frontend implementado (2026-07-28)** — `npm run lint` y `npm run build` limpios. `components/service/LogPanel.jsx`, a todo el ancho de la grilla (clase `svc-span-2`, nueva). Estado de la captura con ocupación del ring, selector de nivel que **muestra la ventana estimada de cada uno** (~19.5 h / ~8 h / ~2.7 h) porque el tradeoff detalle-vs-horas es la decisión real al armar, descarga con checkbox de "mantener capturando", filtros por código y por texto, exports JSON/NDJSON, aviso destacado si el ring pisó entries, y marca `≈` en las horas interpoladas. Incluye un guard para cuando el backend todavía no expone el campo `logs` — frontend y backend son dos imágenes distintas y hay una ventana de deploy donde una está actualizada y la otra no.
+
+Verificado en el browser contra un backend mockeado con datos realistas. El ciclo fallido se lee de un vistazo: tres timeouts de WiFi, giveup, y **45900 ms despierto contra 8990 ms** de un ciclo sano — exactamente el diagnóstico que motivó el sistema. Verificación end-to-end contra el nodo real **pendiente**: requiere el `1.3.0` flasheado y el backend desplegado.
+
+**Lo que falta**: el deploy en la Pi (ver arriba) y flashear el `1.3.0` — el nodo corre `1.2.0`.
 
 ## Vista de service mode en la UI (2026-07-26)
 
