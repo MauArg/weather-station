@@ -72,9 +72,76 @@ Corregido con antigüedad relativa (`formatAge()`, que devuelve null por debajo 
 
 De paso se revisó el camino de limpieza del SSE por si había un leak de suscriptores, que era la otra lectura posible del síntoma: `HandleStream` cierra con `defer Unsubscribe` y sale por `r.Context().Done()`, y `broadcast()` es no bloqueante. **No había nada que arreglar ahí.**
 
-## ⚠️ Pérdida de telemetría: el número real es 42%, y la causa principal sigue abierta (2026-07-29)
+## ⚠️ Pérdida de telemetría: el PUBLISH nunca llega al broker, y el uplink muere DESPUÉS del handshake (2026-07-29, sesión dedicada)
 
-**Esta sección reemplaza la conclusión anterior de "el ~17% quedó resuelto", que era incorrecta por dos motivos: el número estaba subestimado por 2,5× y la causa identificada explica sólo una fracción chica.** Tema diferido a una sesión dedicada — el detalle para atacarlo sin re-derivar nada está más abajo.
+**Localizado.** La pérdida no está en el broker, ni en la entrega a los suscriptores, ni en el margen de RF. El nodo abre la conexión, el broker le contesta el CONNACK, y unos milisegundos o segundos después el camino nodo→broker deja de funcionar **en silencio**: el PUBLISH de telemetría, que sale a los ~2290 ms, no entra nunca al broker. El nodo no se puede enterar — en QoS 0 no hay ack y `PubSubClient::publish()` sólo informa que lwIP aceptó los bytes, que es de donde salía el `LOG_PUBLISH_OK` engañoso.
+
+> **Esto corrige la hipótesis del keepalive/takeover que encabezaba esta sección.** No está descartada del todo (ver abajo qué falta), pero su cadena causal no sobrevive a lo medido. Se conserva más abajo lo que sigue siendo válido.
+
+### Instrumento nuevo: medir la pérdida desde la LAN, en 30 minutos y sin tocar el nodo
+
+Hasta ahora medir la pérdida costaba una captura de logs, una sesión de service mode y una transferencia paginada — o sea una noche y una operación cara. **Ya no.** `brokerprobe` (Go, en el scratchpad de la sesión) se suscribe al broker desde la máquina de desarrollo y lee los contadores `$SYS/broker/#` que publica el propio Mosquitto:
+
+- `$SYS/broker/publish/messages/received` y `.../bytes/received` se incrementan en `handle__publish`, **antes de rutear**. O sea que dicen si el broker *ingresó* el mensaje, con independencia de a quién se lo entregue.
+- Mosquitto publica cada valor de `$SYS` **sólo cuando cambia**, así que la secuencia de mensajes es la secuencia de transiciones con su timestamp.
+
+Eso contesta algo que un tercer suscriptor **no puede** contestar, y por eso el pendiente anotado antes ("un `mosquitto_sub` en la Pi separa 'no llegó al broker' de 'el broker no lo entregó'") estaba mal planteado: si el broker descarta en el ingreso, *todos* los suscriptores pierden igual, y un consumidor más habría visto exactamente lo mismo que el backend y que InfluxDB.
+
+**Medido el 2026-07-29, 32 ciclos de `1.5.0` (boot 200..231), 19 entregados y 13 perdidos = 41%:**
+
+| | ingreso al broker alrededor del wake |
+|---|---|
+| 19 ciclos entregados | 505–662 B (mediana **660 B**) |
+| 13 ciclos perdidos | 64–152 B (mediana **156 B**) |
+
+Y `publish/messages/received` subió **+1 en cada uno de los 19 entregados y 0 en los 13 perdidos**, sin una sola excepción.
+
+### La aritmética de bytes, que es de donde sale la conclusión
+
+Los paquetes del nodo tienen tamaño conocido y fijo:
+
+```
+CONNECT      67 B  = 2 + (2+4 "MQTT") + 1 nivel + 1 flags + 2 keepalive
+                       + (2+18 client id) + (2+19 user) + (2+12 pass)
+SUBSCRIBE    21 B  = 2 + 2 packet id + (2+14 "station/01/cmd") + 1 qos
+PUBLISH     503 B  = 3 + (2+20 "station/01/telemetry") + 478 de payload
+DISCONNECT    2 B
+             ─────
+ciclo sano  593 B     (medido: 595-600 B en las muestras limpias ✓)
+```
+
+El ruido de fondo son los PINGREQ de los otros clientes (2 B c/u) y el healthcheck del contenedor, que conecta y sale cada 30 s (~75 B). Por eso algunas muestras dan ~660 en vez de ~596.
+
+En los ciclos perdidos el ingreso es **~90 B = CONNECT + SUBSCRIBE**, y nada más. Un caso (boot 225) dio 64 B, o sea **sólo el CONNECT**: ahí el uplink murió aún antes, entre el CONNECT y el SUBSCRIBE, que están separados por milisegundos.
+
+**Lo que eso obliga a concluir**, porque TCP entrega en orden y el broker no puede procesar lo posterior sin lo anterior:
+
+1. El CONNECT llegó y el CONNACK volvió (coherente con el `LOG_MQTT_OK` de ~46 ms que el nodo registra en los ciclos perdidos). La conexión estaba viva y era **bidireccional**.
+2. Después, todo lo que el nodo escribe en ese socket se pierde: el PUBLISH y también el DISCONNECT.
+3. El punto de muerte **varía** entre ciclos — a veces inmediatamente después del CONNECT, casi siempre después del SUBSCRIBE y antes del publish.
+
+O sea: **la ventana de muerte es el hueco de ~1,9 s que va del handshake (~330 ms) al publish (~2290 ms)**, y en ese hueco el nodo no manda nada. Es exactamente el tramo en que espera el retenido y lee sensores.
+
+### Por qué la cadena del takeover no cierra
+
+La hipótesis decía: un ciclo publica bien → su `DISCONNECT` se pierde → el broker mantiene la sesión 90 s → el ciclo siguiente hace takeover → **ese** publish se cae → alterna.
+
+- **En los ciclos que llegan, el `DISCONNECT` sí llega**: los 593 B medidos lo incluyen. Entonces esos ciclos cierran limpio y no dejan sesión colgada, así que no hay takeover que provocar en el ciclo siguiente. (Salvedad honesta: son 2 B sobre 593, dentro del ruido — lo que lo prueba de verdad es el log del broker, ver los pendientes.)
+- La sesión colgada aparece después de los ciclos **perdidos**, que son los que no mandan `DISCONNECT`. Pero los datos de alternancia dicen que tras una pérdida el ciclo siguiente **acierta el 72% de las veces** — o sea que el takeover, cuando ocurre, no es lo que rompe.
+- El apoyo histórico (17% con keepalive 15 s vs 42% con 60 s) es débil: esta misma sección ya documenta que **el 17% estaba subestimado 2,5×**, así que probablemente siempre fue ~40% y el keepalive nunca movió la aguja.
+
+### Cambios de firmware de esta sesión
+
+**`1.6.0` — keepalive 30 s en el ciclo normal, 60 s sólo en service mode.** Se mantiene aunque la hipótesis se haya debilitado, porque es correcto por sí mismo: tras cada ciclo perdido queda una sesión viva 90 s y el wake siguiente arrastra un takeover por client-ID duplicado que no tiene por qué existir. Con 30 s el broker la expira a los 45 s, por debajo de los 57 s del peor caso del ciclo. En el ciclo normal el nodo vive 2,2 s, así que su propio PINGREQ nunca se dispara y bajarlo no cuesta nada. Service mode necesita lo contrario (sesiones de minutos, `ArduinoOTA.handle()` bloquea decenas de segundos sin mandar nada) y como el valor que gobierna al broker es el que viaja en el CONNECT, `serviceMode_run()` **reconecta** para renegociarlo — después de publicar el `service_mode_active` y de levantar OTA, para no arriesgar la verificación del flasheo, y con un solo intento porque el loop ya sabe reconectar.
+
+**`1.7.0` — balizas de uplink (`UPLINK_BEACON` en `config.h`, se apagan poniéndolo en 0).** Dos publishes de ~42 B en `station/01/dbg`, con el `boot_count` adentro para poder cruzarlos contra la telemetría faltante: `pre_sensors` al terminar la espera del retenido (~1170 ms) y `pre_publish` inmediatamente antes del payload grande (~2280 ms). Parten el hueco de 1,9 s en tres tramos distinguibles:
+
+| qué llega en un ciclo perdido | conclusión |
+|---|---|
+| ninguna baliza | murió durante la espera del retenido |
+| sólo `pre_sensors` | murió durante la lectura de sensores |
+| las dos | el enlace estaba vivo 10 ms antes → **el problema es el frame de 503 B, no el enlace** |
+| llega hasta la telemetría | el tráfico extra lo arregló → el problema es el hueco sin tráfico |
 
 **Lo medido (segunda captura, `1.3.1`, 68 ciclos, nivel 3):**
 
@@ -98,29 +165,37 @@ De paso se revisó el camino de limpieza del SSE por si había un leak de suscri
 
   Un ciclo tiene casi el doble de probabilidad de perderse si el anterior llegó bien. Se ve a ojo en la secuencia (`X.X.X.X.XXX`, con tramos limpios de hasta 12 seguidos entre medio). Hay además no-estacionariedad: ventanas móviles de 10 ciclos van de 0 a 7 pérdidas.
 
-**Esa alternancia le da un mecanismo concreto a la hipótesis del keepalive, que la RF no puede explicar:**
+La alternancia sigue siendo un dato válido, pero **ya no apoya la cadena del takeover** — ver arriba por qué no cierra. Lo que hoy tiene que explicar cualquier mecanismo candidato es más específico: por qué el uplink muere en un punto variable del hueco de 1,9 s, y por qué eso pasa más seguido justo después de un ciclo exitoso.
 
-1. Un ciclo publica bien → su `DISCONNECT` se pierde (el nodo apaga la radio 200 ms después de mandarlo).
-2. El broker mantiene la sesión viva 90 s (1,5 × keepalive de 60 s), más que el ciclo de ~63 s del nodo.
-3. El ciclo siguiente conecta → el broker hace takeover del client-ID duplicado → **ese publish se cae**.
-4. El takeover limpia la sesión → el ciclo siguiente conecta limpio y publica bien.
-5. → alterna.
+### Lo que falta para cerrarlo
 
-**Experimento decisivo, de una línea**: keepalive **corto en el ciclo normal** (30 s → expiración a 45 s, por debajo de los 63 s del ciclo) y **largo sólo en service mode**. En el ciclo normal el nodo vive 2,3 s, así que el keepalive del cliente nunca llega a dispararse — bajarlo no cuesta nada y hace que el broker expire la sesión antes del próximo wake. En service mode se conserva en 60 s, que es donde hacía falta (ver el bullet del keepalive más abajo). `PubSubClient::setKeepAlive()` se puede llamar por conexión.
-
-**Hipótesis principal, sin confirmar: el cambio de keepalive 15 s → 60 s lo empeoró.** El broker da por muerto a un cliente tras 1,5 × keepalive. Con 15 s eran 22,5 s y el nodo volvía a los ~63 s con la sesión vieja ya expirada. Con 60 s son 90 s: la sesión vieja **sigue viva** en cada reconexión, y el broker tiene que hacer un takeover por client-ID duplicado **en todos los ciclos**. El histórico calza — 17% con keepalive 15 s (`1.1.0`), 42% con 60 s (`1.3.1`).
-
-**La verificación quedó pendiente y el primer intento no sirvió**: se corrió `docker logs mosquitto | grep -i "already connected"` y no devolvió nada, pero `mosquitto.conf` tiene `log_dest file /mosquitto/log/mosquitto.log` — o sea que `docker logs` está vacío por diseño y ese grep no probó nada. El comando correcto es:
+**1. El log del broker — es lo único que separa las dos sub-hipótesis que quedan.** Los bytes del PUBLISH pueden no haber llegado nunca (pérdida en el aire, y el nodo muere antes de que lwIP retransmita: el RTO es de 1-3 s y la radio se apaga 300 ms después del publish), **o** pueden haber llegado a la Pi con el socket ya cerrado por el broker, en cuyo caso el kernel los descarta con un RST y el contador `$SYS` tampoco se mueve. Los dos casos son indistinguibles desde afuera, pero el log del broker los separa:
 
 ```
+docker exec mosquitto sh -c 'ls -la /mosquitto/log/; head -3 /mosquitto/log/mosquitto.log'
 docker exec mosquitto grep -icE "already connected|closing old" /mosquitto/log/mosquitto.log
+docker exec mosquitto grep -ic "exceeded timeout" /mosquitto/log/mosquitto.log
+docker exec mosquitto grep -ic "Socket error on client weather-station-01" /mosquitto/log/mosquitto.log
+docker exec mosquitto sh -c 'grep weather-station-01 /mosquitto/log/mosquitto.log | tail -30'
 ```
 
-`log_type` tiene `error`, `warning` y `notice` activados (un takeover debería aparecer); para ver el patrón de conexión por ciclo hace falta descomentar `log_type information` y reiniciar el contenedor.
+- Si el broker **cerró** el socket, hay una línea de cierre en el instante de la pérdida.
+- Si los bytes **nunca llegaron**, el broker no ve el `DISCONNECT` y da de baja la sesión ~90 s después por keepalive → aparecen `exceeded timeout` en ~40% de los ciclos, y `already connected` en el ciclo siguiente.
+- `log_type` ya tiene `error`, `warning` y `notice`, que alcanzan para las tres líneas. El primer comando da el tramo temporal que cubren los conteos (los timestamps de Mosquitto son epoch). Descomentar `log_type information` en `weather-station-station-iot/infra/mosquitto/config/mosquitto.conf` y reiniciar el contenedor agrega una línea por conexión con el **puerto de origen y el keepalive negociado**.
 
-**Otras vías si el keepalive no es**: un tercer consumidor directo (`mosquitto_sub` en la Pi contando `boot_count` 20 minutos) separa "no llegó al broker" de "el broker no lo entregó"; y un A/B barato es agregar una ventana acotada de drenaje TCP tras el publish y ver si la tasa cae.
+> El intento anterior no sirvió y conviene no repetirlo: `docker logs mosquitto` está vacío **por diseño**, porque `mosquitto.conf` tiene `log_dest file`. Hay que entrar con `docker exec`.
 
-**Nota de método**: el `1.4.0` y el `1.5.0` se hicieron cuidando de **no perturbar el camino de red**, justamente para que el baseline de 42% medido sobre `1.3.1` siga siendo comparable.
+**2. Flashear `1.7.0` y leer las balizas** — parte el hueco de 1,9 s en tres tramos (tabla arriba). Con `brokerprobe` corriendo, el resultado se lee en 30 minutos.
+
+**3. Modem sleep, que es el sospechoso natural del hueco.** El `WiFi.setSleep()` del ESP32 está en el default (`WIFI_PS_MIN_MODEM`), y hay evidencia directa: los pings al nodo vuelven en **53-63 ms** dentro de una LAN, que es el AP guardando el paquete hasta el DTIM. El hueco de 1,9 s sin tráfico es precisamente donde la radio entra en modem sleep. Un `WiFi.setSleep(false)` en el ciclo normal lo prueba en una línea, pero **no es gratis**: son ~+22 mAh/día sobre un presupuesto activo de ~47, así que sirve como experimento y habría que pensarlo dos veces como fix permanente.
+
+### El fix que funciona sin saber la causa
+
+**Confirmación de entrega en banda, aprovechando que TCP entrega en orden.** Hoy el nodo publica a ciegas: QoS 0 no da ack y `PubSubClient` no puede publicar en QoS 1. Pero si el nodo **se suscribe al propio topic de telemetría**, el broker le devuelve su propio payload, y recibir ese eco es prueba de que el PUBLISH entró. Con eso el nodo puede reconectar y republicar en el mismo ciclo, y de paso registrar `confirmado`/`sin confirmar` en el log — convirtiendo el 41% ciego en un dato observable.
+
+Costo: ~40 ms de espera en el caso bueno (RTT de LAN) y ~480 B de RX por ciclo, contra recuperar el 41% de los datos. Vale la pena decidirlo con Mau antes de implementarlo, porque cambia el contrato del ciclo normal.
+
+**Nota de método**: el `1.4.0` y el `1.5.0` se hicieron cuidando de **no perturbar el camino de red**, para que el baseline siguiera siendo comparable. El `1.6.0` y el `1.7.0` **sí lo tocan a propósito**, que es el punto — y el baseline contra el que se comparan ya no es una captura de logs de una noche sino los 32 ciclos medidos con `brokerprobe`, que se reproducen en 35 minutos cuando se quiera.
 
 ### Qué sí quedó establecido (primera captura, `1.3.0`)
 
