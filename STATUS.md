@@ -14,7 +14,7 @@ _Última actualización: 2026-07-28_
 
 **3. `docker compose pull && docker compose up -d`**.
 
-**Además, un reflash pendiente**: la corrección de `LOG_PUBLISH_FAIL` (distinguir buffer de conexión caída) es un cambio de firmware. **Ojo que cambia el diccionario de códigos**, así que al flashearlo la huella deja de coincidir y **cualquier captura en curso se descarta** — es el comportamiento correcto, pero conviene transferir antes lo que interese.
+**4. Reflash del firmware `1.3.1`.** Bumpeado desde `1.3.0` por la corrección de `LOG_PUBLISH_FAIL` (distinguir buffer de conexión caída). **Ojo que cambia el diccionario de códigos**, así que al flashearlo la huella deja de coincidir y **cualquier captura en curso se descarta** — es el comportamiento correcto, pero conviene transferir antes lo que interese. El nodo hoy corre `1.3.0`.
 
 **Nota para probar en local**: si levantás el backend en la máquina de desarrollo, pisá el client ID o va a pelearse con el de la Pi por el mismo (`MQTT_CLIENT_ID=weather-station-backend-dev go run ./cmd/server/main.go`). Para probar sólo cambios de UI contra el backend ya desplegado alcanza con `VITE_API_PROXY=http://192.168.18.250 npm run dev`.
 
@@ -90,9 +90,9 @@ Incluye un guard para cuando el backend todavía no expone el campo `logs` — f
 
 **Dos cosas que aplican a toda la vista de service mode, no sólo a este panel**: el ícono de `.svc-alert` estaba desalineado (con `align-items: flex-start` el SVG se pega al tope de la caja mientras el texto arranca más abajo por su `line-height`; 3px de margen lo centran contra el primer renglón), y ahora los tooltips funcionan sobre `<button>` con la clase `svc-tip` + `data-tip` directo, sin necesitar el wrapper del componente `Tip`.
 
-Verificado en el browser contra un backend mockeado con datos realistas. El ciclo fallido se lee de un vistazo: tres timeouts de WiFi, giveup, y **45900 ms despierto contra 8990 ms** de un ciclo sano — exactamente el diagnóstico que motivó el sistema. Verificación end-to-end contra el nodo real **pendiente**: requiere el `1.3.0` flasheado y el backend desplegado.
+Verificado primero en el browser contra un backend mockeado, y después **end-to-end contra el nodo real**: armar captura, dejarla correr, entrar a service mode, transferir 177 eventos en 4 páginas y borrar con confirmación.
 
-**Lo que falta**: el deploy en la Pi (ver arriba) y flashear el `1.3.0` — el nodo corre `1.2.0`.
+**Lo que falta**: sólo el deploy — ver la sección de arriba.
 
 ## Vista de service mode en la UI (2026-07-26)
 
