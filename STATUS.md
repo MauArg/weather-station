@@ -81,7 +81,32 @@ De paso se revisó el camino de limpieza del SSE por si había un leak de suscri
 - **67 ciclos registraron `LOG_PUBLISH_OK` y sólo 39 llegaron. 28 perdidos = 42%.**
 - Verificado cruzando **dos consumidores independientes**: el backend Go (MQTT directo) e InfluxDB (vía N8N). Coinciden exactamente en qué llegó y qué no. Dos caminos separados que pierden los mismos mensajes ⇒ nunca llegaron al broker.
 - **`LOG_PUBLISH_OK` no prueba entrega.** `PubSubClient::publish()` devuelve `true` cuando la escritura al socket tuvo éxito; en QoS 0 no hay ack posible. El nodo cierra el socket en el mismo milisegundo (`mqtt.disconnect()`) y apaga la radio 200 ms después, así que si el segmento TCP necesita retransmisión —RTO del orden de 1-3 s— muere sin que nadie se entere.
-- **No correlaciona con la señal.** Ciclos que llegaron vs. perdidos: RSSI idéntico (min -65, mediana -63, max -61 en ambos), tiempo de `mqtt.connect()` idéntico (43 vs 40,5 ms), tamaño de payload idéntico. Las rachas de pérdidas siguen una distribución geométrica: pérdida independiente y sin memoria al 42%. *Salvedad*: la banda de RSSI de esa noche fue angosta (4 dB), así que esto descarta que se explique por la variación **dentro** de esa banda, no que a -73 dBm el mecanismo sea otro.
+- **No correlaciona con la señal.** Ciclos que llegaron vs. perdidos: RSSI idéntico, tiempo de `mqtt.connect()` idéntico, tamaño de payload idéntico, tiempo despierto idéntico.
+
+**Confirmado y reforzado por una tercera captura (`1.5.0`, 119 ciclos, 2026-07-29):**
+
+- **La pérdida se mantiene en 38%** — dentro del ruido respecto del 42%, como se esperaba: el `1.4.0` y el `1.5.0` se hicieron cuidando de no tocar el camino de red.
+- **La hipótesis de radiofrecuencia queda muy debilitada.** Esa noche el RSSI barrió **10 dB** (-71 a -61) contra los 4 dB de la captura anterior, y la correlación sigue siendo exactamente **cero**: mediana -67 dBm tanto en los llegados como en los perdidos. La salvedad de la banda angosta queda contestada.
+- **La pérdida NO es independiente — alterna.** Esto **corrige** la conclusión de la captura anterior ("pérdida independiente y sin memoria"), que salió de comparar rachas contra una geométrica sobre sólo 67 muestras. Con 112 pares consecutivos:
+
+  ```
+  P(perdido | el anterior se perdió) = 0.279
+  P(perdido | el anterior llegó)     = 0.470
+          si fuera independiente:      0.384
+          chi² = 3.96 (1 gl) → p < 0.05
+  ```
+
+  Un ciclo tiene casi el doble de probabilidad de perderse si el anterior llegó bien. Se ve a ojo en la secuencia (`X.X.X.X.XXX`, con tramos limpios de hasta 12 seguidos entre medio). Hay además no-estacionariedad: ventanas móviles de 10 ciclos van de 0 a 7 pérdidas.
+
+**Esa alternancia le da un mecanismo concreto a la hipótesis del keepalive, que la RF no puede explicar:**
+
+1. Un ciclo publica bien → su `DISCONNECT` se pierde (el nodo apaga la radio 200 ms después de mandarlo).
+2. El broker mantiene la sesión viva 90 s (1,5 × keepalive de 60 s), más que el ciclo de ~63 s del nodo.
+3. El ciclo siguiente conecta → el broker hace takeover del client-ID duplicado → **ese publish se cae**.
+4. El takeover limpia la sesión → el ciclo siguiente conecta limpio y publica bien.
+5. → alterna.
+
+**Experimento decisivo, de una línea**: keepalive **corto en el ciclo normal** (30 s → expiración a 45 s, por debajo de los 63 s del ciclo) y **largo sólo en service mode**. En el ciclo normal el nodo vive 2,3 s, así que el keepalive del cliente nunca llega a dispararse — bajarlo no cuesta nada y hace que el broker expire la sesión antes del próximo wake. En service mode se conserva en 60 s, que es donde hacía falta (ver el bullet del keepalive más abajo). `PubSubClient::setKeepAlive()` se puede llamar por conexión.
 
 **Hipótesis principal, sin confirmar: el cambio de keepalive 15 s → 60 s lo empeoró.** El broker da por muerto a un cliente tras 1,5 × keepalive. Con 15 s eran 22,5 s y el nodo volvía a los ~63 s con la sesión vieja ya expirada. Con 60 s son 90 s: la sesión vieja **sigue viva** en cada reconexión, y el broker tiene que hacer un takeover por client-ID duplicado **en todos los ciclos**. El histórico calza — 17% con keepalive 15 s (`1.1.0`), 42% con 60 s (`1.3.1`).
 
@@ -133,7 +158,22 @@ Con eso, los dos INA219 resultaron estar en el mismo orden de magnitud que **tod
 - **El power-down no afecta la carga solar**: apaga el ADC del chip, pero el shunt de 0,1 Ω sigue físicamente en serie en el camino del panel.
 - La llamada quedó **al final del teardown, con la radio ya apagada**, y no entre el publish y el `disconnect()`. Con el bus I2C trabado serían hasta 4 × 50 ms de timeout de `TwoWire` inyectados justo en el tramo bajo investigación por el 42% de pérdida — habría arruinado la comparabilidad del baseline.
 
-**`1.5.0` — el warmup del DHT22 corre en paralelo con la red.** El rail-on salió de `sensors_init()` (que corre después de WiFi, MQTT y la espera del retenido) y pasó al arranque del ciclo normal. Los ~2 s de estabilización del DHT22 dejaron de pagarse en serie al final del ciclo. Estimado **3,3 s → ~2,2 s de despierto, ~21 mAh/día**.
+**`1.5.0` — el warmup del DHT22 corre en paralelo con la red.** El rail-on salió de `sensors_init()` (que corre después de WiFi, MQTT y la espera del retenido) y pasó al arranque del ciclo normal. Los ~2 s de estabilización del DHT22 dejaron de pagarse en serie al final del ciclo.
+
+**Medido en campo (2026-07-29, 116 ciclos sanos sobre `1.5.0`):**
+
+| Tramo | `1.3.1` | `1.5.0` |
+|---|---|---|
+| boot → WiFi ok | 277 ms | 275 ms |
+| red lista (absoluto) | 322 ms | 324 ms |
+| `mqtt.connect()` | 42 ms | 46 ms |
+| **red lista → publish** | **3047 ms** | **1968 ms** |
+| **despierto (`LOG_SLEEP`, cuantizado a 100 ms)** | **3300 ms** | **2200 ms** |
+| publish absoluto | 3365 ms | 2292 ms |
+
+**−1073 ms, −33%, ≈ −22 mAh/día** con los 51,7 mA medidos. Los demás tramos quedaron dentro de milisegundos del baseline, que era el objetivo de método: el camino de red no se movió, así que la medición del 42%/38% de pérdida sigue siendo comparable.
+
+**Balance de los dos fixes juntos**: el consumo conocido pasa de ~100–113 mAh/día a **~47 mAh/día** de ventana activa (más el deep sleep, que sigue sin medir). Aproximadamente la mitad.
 
 - `sensors_railsOn()` es **idempotente** y `sensors_init()` la vuelve a llamar, así que el init sigue siendo correcto por si algún camino futuro llega ahí sin pasar por `setup()`.
 - Va **después** del early-return de service mode a propósito: ese camino no toca los rails, y una sesión puede durar 60 min — encenderlos ahí dejaría al sensor de lluvia con tensión continua sobre los electrodos toda la sesión.
