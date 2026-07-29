@@ -4,17 +4,19 @@
 
 _Última actualización: 2026-07-28_
 
-## ⚠️ Pendiente de acción manual — deploy en la Raspberry Pi 4B
+## Deploy completo — backend, frontend y firmware `1.3.1` en producción (2026-07-28)
 
-**El firmware `1.3.0` ya está flasheado y validado en campo** (2026-07-28): se armó una captura, se transfirió completa y el `RTC_NOINIT` quedó confirmado — la captura sobrevivió a dos `reboot`. Lo que falta es del lado del server.
+Todo el sistema de logs está desplegado y corriendo. **El nodo en campo corre `1.3.1`**, flasheado por Mau por fuera de la sesión de trabajo. Ya no queda ninguna acción manual pendiente de este bloque.
 
-**1. Rebuild y push de las DOS imágenes.** `maulpdocker/weather-station:backend` y `:frontend` en Docker Hub son anteriores a todo el sistema de logs. Sin esto, el `docker compose pull` baja lo viejo y no cambia nada.
+Lo que se hizo, en orden:
 
-**2. `git pull`** en el clon de `weather-station` (repo main) de la Pi, para levantar el `docker-compose.yml` nuevo. Agrega un volumen `backend-data` montado en `/data` para el cache del diccionario de logs. Importa porque el diccionario código → texto sólo se puede pedir al nodo, y el nodo sólo conoce el de la versión que corre **ahora**: sin el volumen, cada redeploy lo borra y deja ilegible cualquier export de una versión vieja. No hace falta tocar el `.env` — el compose define `LOG_DICT_PATH` en `environment`, que gana sobre `env_file`.
+**1. Rebuild y push de las DOS imágenes.** `maulpdocker/weather-station:backend` y `:frontend` en Docker Hub eran anteriores a todo el sistema de logs; sin esto el `docker compose pull` bajaba lo viejo.
+
+**2. `git pull`** en el clon de `weather-station` (repo main) de la Pi, para levantar el `docker-compose.yml` nuevo. Agrega un volumen `backend-data` montado en `/data` para el cache del diccionario de logs. Importa porque el diccionario código → texto sólo se puede pedir al nodo, y el nodo sólo conoce el de la versión que corre **ahora**: sin el volumen, cada redeploy lo borra y deja ilegible cualquier export de una versión vieja. No hizo falta tocar el `.env` — el compose define `LOG_DICT_PATH` en `environment`, que gana sobre `env_file`.
 
 **3. `docker compose pull && docker compose up -d`**.
 
-**4. Reflash del firmware `1.3.1`.** Bumpeado desde `1.3.0` por la corrección de `LOG_PUBLISH_FAIL` (distinguir buffer de conexión caída). **Ojo que cambia el diccionario de códigos**, así que al flashearlo la huella deja de coincidir y **cualquier captura en curso se descarta** — es el comportamiento correcto, pero conviene transferir antes lo que interese. El nodo hoy corre `1.3.0`.
+**4. Reflash a `1.3.1`.** Bumpeado desde `1.3.0` por la corrección de `LOG_PUBLISH_FAIL` (distinguir buffer de conexión caída). Cambió el diccionario de códigos, así que al flashear la huella dejó de coincidir y cualquier captura en curso sobre `1.3.0` se descartó — comportamiento correcto y esperado.
 
 **Nota para probar en local**: si levantás el backend en la máquina de desarrollo, pisá el client ID o va a pelearse con el de la Pi por el mismo (`MQTT_CLIENT_ID=weather-station-backend-dev go run ./cmd/server/main.go`). Para probar sólo cambios de UI contra el backend ya desplegado alcanza con `VITE_API_PROXY=http://192.168.18.250 npm run dev`.
 
@@ -43,7 +45,7 @@ Primera captura real del sistema de logs contra el `1.3.0` en campo — 177 even
 
 ## Sistema de logs del nodo — completo en los tres repos y validado en campo (2026-07-28)
 
-Diseño completo en [`weather-station-station-iot/logging_system_design.md`](./weather-station-station-iot/logging_system_design.md), que es el contrato para los tres repos. **Firmware, backend y frontend implementados; el flujo entero se probó end-to-end contra el nodo real** — armar captura, dejarla correr, entrar a service mode, transferir 177 eventos en 4 páginas y borrar con confirmación. Sólo queda el deploy (ver arriba).
+Diseño completo en [`weather-station-station-iot/logging_system_design.md`](./weather-station-station-iot/logging_system_design.md), que es el contrato para los tres repos. **Firmware, backend y frontend implementados; el flujo entero se probó end-to-end contra el nodo real** — armar captura, dejarla correr, entrar a service mode, transferir 177 eventos en 4 páginas y borrar con confirmación. **Desplegado y en producción** (ver arriba).
 
 **El problema**: el nodo en campo no tiene observabilidad. `LOG_V`/`LOG_E` son `Serial.printf` y con `LOG_LEVEL=0` compilan a no-op, así que la única forma de ver algo es abrir la caja estanca y enchufar USB. El disparador concreto sigue siendo el ~17% de ciclos sin telemetría, donde hoy no se puede saber si falla WiFi o MQTT.
 
@@ -92,7 +94,7 @@ Incluye un guard para cuando el backend todavía no expone el campo `logs` — f
 
 Verificado primero en el browser contra un backend mockeado, y después **end-to-end contra el nodo real**: armar captura, dejarla correr, entrar a service mode, transferir 177 eventos en 4 páginas y borrar con confirmación.
 
-**Lo que falta**: sólo el deploy — ver la sección de arriba.
+**Desplegado en producción** el 2026-07-28 junto con el firmware `1.3.1` — ver la sección de arriba.
 
 ## Vista de service mode en la UI (2026-07-26)
 
