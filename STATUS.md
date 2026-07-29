@@ -72,11 +72,31 @@ Corregido con antigüedad relativa (`formatAge()`, que devuelve null por debajo 
 
 De paso se revisó el camino de limpieza del SSE por si había un leak de suscriptores, que era la otra lectura posible del síntoma: `HandleStream` cierra con `defer Unsubscribe` y sale por `r.Context().Done()`, y `broadcast()` es no bloqueante. **No había nada que arreglar ahí.**
 
-## ⚠️ Pérdida de telemetría: el PUBLISH nunca llega al broker, y el uplink muere DESPUÉS del handshake (2026-07-29, sesión dedicada)
+## ⚠️ Pérdida de telemetría: se muere la ASOCIACIÓN WIFI a mitad del ciclo (2026-07-29, sesión dedicada)
 
-**Localizado.** La pérdida no está en el broker, ni en la entrega a los suscriptores, ni en el margen de RF. El nodo abre la conexión, el broker le contesta el CONNACK, y unos milisegundos o segundos después el camino nodo→broker deja de funcionar **en silencio**: el PUBLISH de telemetría, que sale a los ~2290 ms, no entra nunca al broker. El nodo no se puede enterar — en QoS 0 no hay ack y `PubSubClient::publish()` sólo informa que lwIP aceptó los bytes, que es de donde salía el `LOG_PUBLISH_OK` engañoso.
+**Localizado, y una capa entera más abajo de donde se lo venía buscando.** No es el broker, no es la entrega a los suscriptores, no es MQTT, no es TCP y no es el margen de RF. **El nodo se asocia bien, y unos cientos de milisegundos o unos segundos después deja de estar en la red — en los dos sentidos.** Todo lo demás que se venía midiendo son consecuencias de en qué punto del ciclo cae ese corte.
 
-> **Esto corrige la hipótesis del keepalive/takeover que encabezaba esta sección.** No está descartada del todo (ver abajo qué falta), pero su cadena causal no sobrevive a lo medido. Se conserva más abajo lo que sigue siendo válido.
+La prueba: sondeando el nodo con ICMP cada 150 ms (contesta ping, tiene IP estática) mientras se medían las llegadas al broker, **la ventana en que el nodo responde predice exactamente hasta dónde llega el ciclo**:
+
+| ventana alcanzable por ICMP | hasta dónde llega el ciclo |
+|---|---|
+| 0–180 ms | ni siquiera conecta al broker |
+| 470–1100 ms | conecta al broker, no llega a publicar |
+| 2150–2700 ms | publica y cierra limpio |
+
+El publish de telemetría sale a los ~2290 ms, así que sólo los ciclos del tercer grupo lo logran. Como el nodo no se puede enterar —en QoS 0 no hay ack y `PubSubClient::publish()` sólo informa que lwIP aceptó los bytes—, publica contra un enlace muerto y registra `LOG_PUBLISH_OK`. De ahí salía el dato engañoso que sostuvo todas las hipótesis anteriores.
+
+**Esto reinterpreta un descarte que estaba documentado como firme**: *"no es WiFi — asoció al primer intento las 30 veces, cero `WIFI_FAIL`"*. Es cierto y es irrelevante: la asociación **siempre** funciona, se muere después, y `connectWiFi()` no vuelve a mirar `WiFi.status()` en todo el resto del ciclo.
+
+**Descartado que sea un reset o un panic**: el nodo volvería a conectarse ~350 ms más tarde y aparecerían dos renglones en el log del broker en el mismo ciclo. No aparecen, y los wakes siguen clavados en la grilla de 62-63 s.
+
+**Descartado el tamaño de frame**, que era la otra lectura posible de "el CONNECT de 67 B pasa y el PUBLISH de 503 B no": pings alternados de 32 B y 470 B *dentro* de la ventana despierta dan 88,3% y 91,7% de éxito. El grande no falla más que el chico.
+
+**Sospechoso principal: el modem sleep** (`WIFI_PS_MIN_MODEM`, que es el default del Arduino-ESP32). Dos indicios: los pings vuelven en **42-54 ms dentro de una LAN**, que es el AP guardando el paquete hasta el DTIM del nodo; y agregar tráfico de bajada durante la ventana hace que la asociación muera **antes**, no después. `1.8.0` lo apaga (`WIFI_POWER_SAVE 0`) — es el A/B pendiente, y cuesta ~+22 mAh/día si resulta ser el fix, medibles con el propio `system_mA` de la telemetría.
+
+**La bifurcación que falta resolver, y es del router**: ¿el AP le manda un deauth al nodo, o el nodo se queda sordo solo? Si hay deauth en el log del router para `80:F1:B2:6D:F9:FC`, el reason code nombra la causa y el fix es del lado del router (band steering / 802.11k-v-r / rekey). Si no hay deauth, la radio del nodo se apaga sola y el fix es `WiFi.setSleep(false)`.
+
+> Se conserva más abajo lo que sigue siendo válido de las hipótesis anteriores, incluida la del keepalive/takeover — que **no** explica la pérdida, pero cuyo `1.6.0` se mantiene por ser correcto por sí mismo.
 
 ### Instrumento nuevo: medir la pérdida desde la LAN, en 30 minutos y sin tocar el nodo
 
