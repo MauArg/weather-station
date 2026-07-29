@@ -6,23 +6,34 @@ _Última actualización: 2026-07-28_
 
 ## ⚠️ Pendiente de acción manual — deploy en la Raspberry Pi 4B
 
-El `docker-compose.yml` de este repo cambió (2026-07-28) y **el server todavía no lo tiene**. Se agregó un volumen `backend-data` montado en `/data` para el cache del diccionario de logs del nodo.
+**El firmware `1.3.0` ya está flasheado y validado en campo** (2026-07-28): se armó una captura, se transfirió completa y el `RTC_NOINIT` quedó confirmado — la captura sobrevivió a dos `reboot`. Lo que falta es del lado del server.
 
-Por qué importa: el diccionario código → texto sólo se puede pedir al nodo, y el nodo sólo conoce el de la versión de firmware que está corriendo **ahora**. Sin el volumen, cada `docker compose pull && up -d` borra el cache y deja ilegible cualquier export de logs de una versión vieja.
+**1. Rebuild y push de las DOS imágenes.** `maulpdocker/weather-station:backend` y `:frontend` en Docker Hub son anteriores a todo el sistema de logs. Sin esto, el `docker compose pull` baja lo viejo y no cambia nada.
 
-Pasos, en orden:
+**2. `git pull`** en el clon de `weather-station` (repo main) de la Pi, para levantar el `docker-compose.yml` nuevo. Agrega un volumen `backend-data` montado en `/data` para el cache del diccionario de logs. Importa porque el diccionario código → texto sólo se puede pedir al nodo, y el nodo sólo conoce el de la versión que corre **ahora**: sin el volumen, cada redeploy lo borra y deja ilegible cualquier export de una versión vieja. No hace falta tocar el `.env` — el compose define `LOG_DICT_PATH` en `environment`, que gana sobre `env_file`.
 
-1. **Rebuild y push de la imagen del backend** — el código nuevo del sistema de logs está commiteado pero la imagen `maulpdocker/weather-station:backend` en Docker Hub todavía es la anterior. Sin esto, el paso 3 baja la imagen vieja y no cambia nada.
-2. **`git pull`** en el clon de `weather-station` (repo main) de la Pi, para levantar el `docker-compose.yml` nuevo.
-3. **`docker compose pull && docker compose up -d`**.
+**3. `docker compose pull && docker compose up -d`**.
 
-No hace falta tocar el `.env` de la Pi: el compose define `LOG_DICT_PATH` en `environment`, que tiene precedencia sobre `env_file`.
+**Además, un reflash pendiente**: la corrección de `LOG_PUBLISH_FAIL` (distinguir buffer de conexión caída) es un cambio de firmware. **Ojo que cambia el diccionario de códigos**, así que al flashearlo la huella deja de coincidir y **cualquier captura en curso se descarta** — es el comportamiento correcto, pero conviene transferir antes lo que interese.
 
-Se puede desplegar ya, aunque el frontend no esté: los cambios de backend son compatibles hacia atrás (endpoints nuevos más un campo `logs` en el snapshot de estado) y permiten probar el flujo entero con `curl` contra `/api/v1/logs/`. Ojo que el flujo completo igual necesita el **firmware `1.3.0` flasheado**, que también está pendiente — el nodo corre `1.2.0` y no conoce los topics `log/req` ni `log/data`.
+**Nota para probar en local**: si levantás el backend en la máquina de desarrollo, pisá el client ID o va a pelearse con el de la Pi por el mismo (`MQTT_CLIENT_ID=weather-station-backend-dev go run ./cmd/server/main.go`). Para probar sólo cambios de UI contra el backend ya desplegado alcanza con `VITE_API_PROXY=http://192.168.18.250 npm run dev`.
 
-## Sistema de logs del nodo — firmware listo, backend y frontend pendientes (2026-07-28)
+## El ~17% de ciclos perdidos: resuelto (2026-07-28)
 
-Diseño completo en [`weather-station-station-iot/logging_system_design.md`](./weather-station-station-iot/logging_system_design.md), que es el contrato para los tres repos. **El firmware está implementado y compila limpio (`1.3.0` / `1.3.0-dev`); backend y frontend todavía no se tocaron.**
+Primera captura real del sistema de logs contra el `1.3.0` en campo — 177 eventos, 30 ciclos, nivel verboso, 0 pisados. **Análisis completo en [`weather-station-station-iot/aprendizajes_y_roadmap.md`](./weather-station-station-iot/aprendizajes_y_roadmap.md) → "Primera captura de logs en campo".** Resumen:
+
+- **No es WiFi.** Asoció en el primer intento las 30 veces, con señal buena y mala. Cero `WIFI_FAIL`, cero `WIFI_GIVEUP`.
+- **Es TCP/MQTT, y correlaciona con el RSSI.** A **-73 dBm fallaron 3 de 5 ciclos (60%)**; a -63/-66 dBm, **0 de 21**. El handshake MQTT pasa de ~40 ms a 2400–3200 ms y a veces cruza el socket timeout de 5 s. `state -4` = `MQTT_CONNECTION_TIMEOUT`.
+- **El enlace oscila ~9 dB solo por movimiento de personas o puertas**, sin ningún cambio de configuración. El router ya está al máximo de potencia, y eso fue un parche necesario: en "medium" el nodo no conectaba. La condición marginal es el régimen normal.
+- **El tiempo despierto es 3,3 s, no ~10 s** — la cifra que circulaba por los documentos estaba mal por 3×. La red está lista a los 314 ms y el nodo se queda 3 s más con el WiFi asociado esperando el retenido y el warmup del DHT22. Eso reordena dos pendientes conocidos: **los 800 ms del retenido son el 24% del despierto, no el 8%**, y el **warmup del DHT22 es el 61%**.
+
+**Corregido ya**: `LOG_PUBLISH_FAIL` decía "¿buffer corto?" con 505 B contra 741 disponibles — era una conexión caída. Ahora el firmware distingue las dos causas.
+
+**Diferido a una sesión propia** (documentado con detalle suficiente para implementar sin re-derivar): reintento de `mqtt.connect()` en el ciclo normal —el de mayor impacto, y casi imprescindible dado que el enlace oscila solo—, mover el rail-on del DHT22 al inicio de `setup()` (~34% menos de tiempo despierto), y revisar el presupuesto de reintentos de WiFi, dimensionado para un modo de falla que no es el real.
+
+## Sistema de logs del nodo — completo en los tres repos y validado en campo (2026-07-28)
+
+Diseño completo en [`weather-station-station-iot/logging_system_design.md`](./weather-station-station-iot/logging_system_design.md), que es el contrato para los tres repos. **Firmware, backend y frontend implementados; el flujo entero se probó end-to-end contra el nodo real** — armar captura, dejarla correr, entrar a service mode, transferir 177 eventos en 4 páginas y borrar con confirmación. Sólo queda el deploy (ver arriba).
 
 **El problema**: el nodo en campo no tiene observabilidad. `LOG_V`/`LOG_E` son `Serial.printf` y con `LOG_LEVEL=0` compilan a no-op, así que la única forma de ver algo es abrir la caja estanca y enchufar USB. El disparador concreto sigue siendo el ~17% de ciclos sin telemetría, donde hoy no se puede saber si falla WiFi o MQTT.
 
@@ -131,7 +142,7 @@ Repaso completo del firmware antes de flashear, en dos tandas (`968bb55` y `d84e
 
 ### Flaggeado en la revisión de firmware, para otra sesión (no bloquea el flasheo)
 
-- **`waitForRetainedCommand()` paga 800 ms fijos en casi todos los ciclos.** El loop espera hasta `MQTT_RETAINED_WAIT_MS` a que llegue un retenido, y sale antes solo si efectivamente hay uno — o sea que la mayoría de los ciclos, que no tienen comando, esperan los 800 ms completos despiertos a 50-140 mA. Sobre un tiempo despierto de ~10 s es ~8%, del orden de 30 mAh/día sobre un pack de 1500. **No tocado a propósito**: acortarlo es un tradeoff, no una mejora gratis. El broker manda los retenidos apenas responde el SUBACK y `PubSubClient::subscribe()` no espera confirmación, así que un margen demasiado corto haría que el nodo se **pierda** comandos de mantenimiento — que es bastante peor que el costo energético. Medir el tiempo real hasta el primer retenido antes de bajarlo.
+- **`waitForRetainedCommand()` paga 800 ms fijos en casi todos los ciclos.** El loop espera hasta `MQTT_RETAINED_WAIT_MS` a que llegue un retenido, y sale antes solo si efectivamente hay uno — o sea que la mayoría de los ciclos, que no tienen comando, esperan los 800 ms completos despiertos a 50-140 mA. Sobre un tiempo despierto de ~10 s es ~8%, del orden de 30 mAh/día sobre un pack de 1500. **Corregido 2026-07-28: el despierto real son 3,3 s, así que son el 24% — ver la sección del ~17% arriba.** **No tocado a propósito**: acortarlo es un tradeoff, no una mejora gratis. El broker manda los retenidos apenas responde el SUBACK y `PubSubClient::subscribe()` no espera confirmación, así que un margen demasiado corto haría que el nodo se **pierda** comandos de mantenimiento — que es bastante peor que el costo energético. Medir el tiempo real hasta el primer retenido antes de bajarlo.
 - **`system_mW` no es consumo real** y el `delay(2000)` de `LOG_LEVEL>0` — ya documentados más arriba y en `componentes_y_conexiones.md`.
 - **Rollback de OTA — evaluado el 2026-07-27, decisión: no se implementa por ahora.** Análisis completo en `weather-station-station-iot/aprendizajes_y_roadmap.md`. Dos correcciones a lo que se había anotado antes: la palanca es `verifyRollbackLater()` y no `verifyOta()` (que corre antes de `setup()` y no puede juzgar si el firmware funciona), y diferir la validación **no** te deja sin poder re-flashear, porque el `Update` de Arduino esquiva el `esp_ota_begin()` que tiene ese guard. Se descarta por costo/beneficio: de los bugs reales que aparecieron en este firmware, el rollback no habría atrapado ninguno. Se reconsidera si el firmware se vuelve más riesgoso de flashear.
 
@@ -141,7 +152,7 @@ El detector de huecos de `boot_count` mostró, apenas se encendió, que el nodo 
 
 `boot_count` incrementa al principio de `setup()`, antes de la red, así que un hueco significa que el nodo despertó pero salió por `if (!connectWiFi())` o `if (!connectMQTT())` sin publicar. Descartado que sea overflow del buffer MQTT: los payloads miden 485–490 B contra 741 útiles. RSSI ronda -67/-68 dBm.
 
-Importa por energía, no solo por datos: un ciclo que falla la conexión puede quemar hasta 45 s despierto (`WIFI_MAX_RETRIES` 3 × `WIFI_TIMEOUT_MS` 15 s) a 50-140 mA, contra los ~10 s de un ciclo exitoso. Con `LOG_LEVEL=0` en campo no se puede distinguir si falla WiFi o MQTT.
+Importa por energía, no solo por datos: un ciclo que falla la conexión puede quemar hasta 45 s despierto (`WIFI_MAX_RETRIES` 3 × `WIFI_TIMEOUT_MS` 15 s) a 50-140 mA, contra los ~10 s de un ciclo exitoso. **Medido 2026-07-28: nada de esto ocurre así — los fallidos cuestan 5,7–6,2 s y fallan en MQTT, no en WiFi; los sanos duran 3,3 s.** Con `LOG_LEVEL=0` en campo no se puede distinguir si falla WiFi o MQTT.
 
 **Hipótesis de Mau (2026-07-26): es señal WiFi marginal en la ubicación de campo.** Ya lo había notado antes de que la herramienta lo cuantificara. En banco no pasa — el router está cerca —, pero en el fondo la señal llega justa. Consistente con el RSSI de -65/-68 dBm medido. **Tema diferido a otra sesión**, no está en curso.
 
