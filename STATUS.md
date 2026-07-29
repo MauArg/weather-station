@@ -18,6 +18,16 @@ _Última actualización: 2026-07-28_
 
 **Nota para probar en local**: si levantás el backend en la máquina de desarrollo, pisá el client ID o va a pelearse con el de la Pi por el mismo (`MQTT_CLIENT_ID=weather-station-backend-dev go run ./cmd/server/main.go`). Para probar sólo cambios de UI contra el backend ya desplegado alcanza con `VITE_API_PROXY=http://192.168.18.250 npm run dev`.
 
+## No hay sesión entre front y backend — pero la historia se veía como si fuera actual (2026-07-28)
+
+Volver al dashboard después de una noche mostraba payloads y anomalías de horas atrás, lo que se leía como una sesión que quedaba abierta. **No la hay**: el backend es el cliente MQTT, corre siempre con o sin browser —eso es lo que hace que el banner de comando retenido y el watchdog de sesión funcionen sin nadie mirando— y ceba cada conexión nueva con su ring buffer a propósito, para que el visor no abra vacío.
+
+Lo que sí estaba mal es que esa historia no se distinguía de lo actual: `formatClock()` imprime `HH:MM:SS` y nada más, así que un evento de anoche se ve idéntico a uno de hace un minuto. Medido contra el backend desplegado, abrir el dashboard entrega **57 payloads que abarcan 1,3 h**, y el cliente pide hasta 100 (~1,8 h tras una noche).
+
+Corregido con antigüedad relativa (`formatAge()`, que devuelve null por debajo de 2 min para no ensuciar lo que sí es en vivo), un separador entre el backlog y lo que llega después, y el mismo tratamiento en las discontinuidades de `boot_count` — ahí es donde más confundía, porque la lista guarda las últimas 20 sin tope de tiempo. El visor pasó a llamarse "Payloads del broker".
+
+De paso se revisó el camino de limpieza del SSE por si había un leak de suscriptores, que era la otra lectura posible del síntoma: `HandleStream` cierra con `defer Unsubscribe` y sale por `r.Context().Done()`, y `broadcast()` es no bloqueante. **No había nada que arreglar ahí.**
+
 ## El ~17% de ciclos perdidos: resuelto (2026-07-28)
 
 Primera captura real del sistema de logs contra el `1.3.0` en campo — 177 eventos, 30 ciclos, nivel verboso, 0 pisados. **Análisis completo en [`weather-station-station-iot/aprendizajes_y_roadmap.md`](./weather-station-station-iot/aprendizajes_y_roadmap.md) → "Primera captura de logs en campo".** Resumen:
