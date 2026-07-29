@@ -2,7 +2,7 @@
 
 > Actualizar este archivo al final de cada sesión de trabajo relevante. Es el punto de partida para la siguiente conversación — ver política en [`CLAUDE.md`](./CLAUDE.md).
 
-_Última actualización: 2026-07-28_
+_Última actualización: 2026-07-29_
 
 ## Deploy completo — backend, frontend y firmware `1.3.1` en producción (2026-07-28)
 
@@ -30,9 +30,34 @@ Corregido con antigüedad relativa (`formatAge()`, que devuelve null por debajo 
 
 De paso se revisó el camino de limpieza del SSE por si había un leak de suscriptores, que era la otra lectura posible del síntoma: `HandleStream` cierra con `defer Unsubscribe` y sale por `r.Context().Done()`, y `broadcast()` es no bloqueante. **No había nada que arreglar ahí.**
 
-## El ~17% de ciclos perdidos: resuelto (2026-07-28)
+## ⚠️ Pérdida de telemetría: el número real es 42%, y la causa principal sigue abierta (2026-07-29)
 
-Primera captura real del sistema de logs contra el `1.3.0` en campo — 177 eventos, 30 ciclos, nivel verboso, 0 pisados. **Análisis completo en [`weather-station-station-iot/aprendizajes_y_roadmap.md`](./weather-station-station-iot/aprendizajes_y_roadmap.md) → "Primera captura de logs en campo".** Resumen:
+**Esta sección reemplaza la conclusión anterior de "el ~17% quedó resuelto", que era incorrecta por dos motivos: el número estaba subestimado por 2,5× y la causa identificada explica sólo una fracción chica.** Tema diferido a una sesión dedicada — el detalle para atacarlo sin re-derivar nada está más abajo.
+
+**Lo medido (segunda captura, `1.3.1`, 68 ciclos, nivel 3):**
+
+- **67 ciclos registraron `LOG_PUBLISH_OK` y sólo 39 llegaron. 28 perdidos = 42%.**
+- Verificado cruzando **dos consumidores independientes**: el backend Go (MQTT directo) e InfluxDB (vía N8N). Coinciden exactamente en qué llegó y qué no. Dos caminos separados que pierden los mismos mensajes ⇒ nunca llegaron al broker.
+- **`LOG_PUBLISH_OK` no prueba entrega.** `PubSubClient::publish()` devuelve `true` cuando la escritura al socket tuvo éxito; en QoS 0 no hay ack posible. El nodo cierra el socket en el mismo milisegundo (`mqtt.disconnect()`) y apaga la radio 200 ms después, así que si el segmento TCP necesita retransmisión —RTO del orden de 1-3 s— muere sin que nadie se entere.
+- **No correlaciona con la señal.** Ciclos que llegaron vs. perdidos: RSSI idéntico (min -65, mediana -63, max -61 en ambos), tiempo de `mqtt.connect()` idéntico (43 vs 40,5 ms), tamaño de payload idéntico. Las rachas de pérdidas siguen una distribución geométrica: pérdida independiente y sin memoria al 42%. *Salvedad*: la banda de RSSI de esa noche fue angosta (4 dB), así que esto descarta que se explique por la variación **dentro** de esa banda, no que a -73 dBm el mecanismo sea otro.
+
+**Hipótesis principal, sin confirmar: el cambio de keepalive 15 s → 60 s lo empeoró.** El broker da por muerto a un cliente tras 1,5 × keepalive. Con 15 s eran 22,5 s y el nodo volvía a los ~63 s con la sesión vieja ya expirada. Con 60 s son 90 s: la sesión vieja **sigue viva** en cada reconexión, y el broker tiene que hacer un takeover por client-ID duplicado **en todos los ciclos**. El histórico calza — 17% con keepalive 15 s (`1.1.0`), 42% con 60 s (`1.3.1`).
+
+**La verificación quedó pendiente y el primer intento no sirvió**: se corrió `docker logs mosquitto | grep -i "already connected"` y no devolvió nada, pero `mosquitto.conf` tiene `log_dest file /mosquitto/log/mosquitto.log` — o sea que `docker logs` está vacío por diseño y ese grep no probó nada. El comando correcto es:
+
+```
+docker exec mosquitto grep -icE "already connected|closing old" /mosquitto/log/mosquitto.log
+```
+
+`log_type` tiene `error`, `warning` y `notice` activados (un takeover debería aparecer); para ver el patrón de conexión por ciclo hace falta descomentar `log_type information` y reiniciar el contenedor.
+
+**Otras vías si el keepalive no es**: un tercer consumidor directo (`mosquitto_sub` en la Pi contando `boot_count` 20 minutos) separa "no llegó al broker" de "el broker no lo entregó"; y un A/B barato es agregar una ventana acotada de drenaje TCP tras el publish y ver si la tasa cae.
+
+**Nota de método**: el `1.4.0` y el `1.5.0` se hicieron cuidando de **no perturbar el camino de red**, justamente para que el baseline de 42% medido sobre `1.3.1` siga siendo comparable.
+
+### Qué sí quedó establecido (primera captura, `1.3.0`)
+
+177 eventos, 30 ciclos, nivel verboso, 0 pisados. **Análisis completo en [`weather-station-station-iot/aprendizajes_y_roadmap.md`](./weather-station-station-iot/aprendizajes_y_roadmap.md) → "Primera captura de logs en campo".** Sigue siendo válido, pero explica el 1,5% de fallos de conexión, no el 42% de pérdida:
 
 - **No es WiFi.** Asoció en el primer intento las 30 veces, con señal buena y mala. Cero `WIFI_FAIL`, cero `WIFI_GIVEUP`.
 - **Es TCP/MQTT, y correlaciona con el RSSI.** A **-73 dBm fallaron 3 de 5 ciclos (60%)**; a -63/-66 dBm, **0 de 21**. El handshake MQTT pasa de ~40 ms a 2400–3200 ms y a veces cruza el socket timeout de 5 s. `state -4` = `MQTT_CONNECTION_TIMEOUT`.
@@ -41,13 +66,49 @@ Primera captura real del sistema de logs contra el `1.3.0` en campo — 177 even
 
 **Corregido ya**: `LOG_PUBLISH_FAIL` decía "¿buffer corto?" con 505 B contra 741 disponibles — era una conexión caída. Ahora el firmware distingue las dos causas.
 
-**Diferido a una sesión propia** (documentado con detalle suficiente para implementar sin re-derivar): reintento de `mqtt.connect()` en el ciclo normal —el de mayor impacto, y casi imprescindible dado que el enlace oscila solo—, mover el rail-on del DHT22 al inicio de `setup()` (~34% menos de tiempo despierto), y revisar el presupuesto de reintentos de WiFi, dimensionado para un modo de falla que no es el real.
+**Diferido a la sesión dedicada de MQTT**: reintento de `mqtt.connect()` en el ciclo normal. Hoy hay un único intento; si da timeout, `main.cpp` va directo a `goToDeepSleep()`. Con WiFi ya arriba —la parte cara, y que nunca falla— un segundo intento cuesta a lo sumo otro socket timeout. Y **revisar el presupuesto de reintentos de WiFi**: `WIFI_MAX_RETRIES` 3 × `WIFI_TIMEOUT_MS` 15 s da un peor caso de 45 s que nunca ocurrió — los ciclos fallidos costaron 5,2–6,2 s y todos fallaron en MQTT. Antes de recortarlo conviene capturar una ventana con señal peor, para no optimizar contra una muestra de una sola noche.
+
+**Ya hecho**: mover el rail-on del DHT22 al inicio de `setup()` — entró en el `1.5.0`, ver la sección de power management.
+
+## Power management — dos fixes en campo (2026-07-29)
+
+Retomado tras estar en pausa desde el 2026-07-26. La medición de campo reordenó las prioridades respecto de lo que se suponía.
+
+**El dato que faltaba: `system_mA` = 51,2 mA de mediana** en la ventana despierta (59 muestras de InfluxDB). La cifra que se venía estimando era ~100 mA — **estaba 2× alta**. Presupuesto real:
+
+| Consumidor | mAh/día | Origen |
+|---|---|---|
+| Ventana despierta (51,2 mA × 3,3 s × 1440) | ~68 | medido |
+| INA219 en conversión continua 24/7 | 32–45 | datasheet, sin medir |
+
+Con eso, los dos INA219 resultaron estar en el mismo orden de magnitud que **toda** la ventana activa, cosa que no estaba en ninguna lista de pendientes.
+
+**`1.4.0` — los INA219 duermen en power-down entre ciclos.** Cuelgan del bus 3V3, que el regulador del ESP32 sigue alimentando durante el deep sleep, así que venían convirtiendo los ~57 s por ciclo en que nadie los lee: ~0,7-1 mA c/u contra ~6 µA en power-down. Ahorro estimado **32–45 mAh/día**. Detalles que no conviene re-derivar:
+
+- `Adafruit_INA219::powerSave()` usa `i2c_dev` **sin chequear null**, y el camino de fallo de red entra a deep sleep sin pasar por `sensors_init()`. De ahí el guard por `_solar_ok`/`_system_ok` — sin él, el nodo crashearía justo en los ciclos que fallan la conexión.
+- No hace falta despertarlos: `begin()` → `init()` → `setCalibration_32V_2A()` reescribe el registro de config completo, incluido `MODE_SANDBVOLT_CONTINUOUS`.
+- `serviceMode_exit()` llama a `esp_deep_sleep()` directo, sin pasar por `goToDeepSleep()`, así que apaga los monitores por su cuenta. Las cinco salidas de service mode pasan todas por ahí.
+- **El power-down no afecta la carga solar**: apaga el ADC del chip, pero el shunt de 0,1 Ω sigue físicamente en serie en el camino del panel.
+- La llamada quedó **al final del teardown, con la radio ya apagada**, y no entre el publish y el `disconnect()`. Con el bus I2C trabado serían hasta 4 × 50 ms de timeout de `TwoWire` inyectados justo en el tramo bajo investigación por el 42% de pérdida — habría arruinado la comparabilidad del baseline.
+
+**`1.5.0` — el warmup del DHT22 corre en paralelo con la red.** El rail-on salió de `sensors_init()` (que corre después de WiFi, MQTT y la espera del retenido) y pasó al arranque del ciclo normal. Los ~2 s de estabilización del DHT22 dejaron de pagarse en serie al final del ciclo. Estimado **3,3 s → ~2,2 s de despierto, ~21 mAh/día**.
+
+- `sensors_railsOn()` es **idempotente** y `sensors_init()` la vuelve a llamar, así que el init sigue siendo correcto por si algún camino futuro llega ahí sin pasar por `setup()`.
+- Va **después** del early-return de service mode a propósito: ese camino no toca los rails, y una sesión puede durar 60 min — encenderlos ahí dejaría al sensor de lluvia con tensión continua sobre los electrodos toda la sesión.
+- **El tiempo total de rails energizados no cambia**: el ciclo se acorta en la misma medida en que el encendido se adelanta (~2540 ms antes, ~2545 ms después). La exposición del sensor de lluvia queda igual.
+- El DHT22 sigue recibiendo `DHT_WARMUP_MS` completos desde la energización; lo único que cambia es cuánto de eso se superpone con trabajo útil.
+
+**Efecto de composición que invalida un pendiente anotado.** Desde el `1.5.0` el despierto es `max(camino de red ≈ 1270 ms, DHT_WARMUP_MS = 2000 ms) + lecturas ≈ 240 ms`, o sea que **el warmup pasa a ser el término que manda**. Consecuencia: **acortar `MQTT_RETAINED_WAIT_MS` ya no ahorra nada** — lo que se recorte ahí lo absorbe el warmup y el total queda igual. El pendiente que figuraba como "los 800 ms del retenido son el 24% del despierto" dejó de aplicar. La palanca que queda viva es `DHT_WARMUP_MS`, hoy en 2× el mínimo del datasheet del AM2302, pero bajarlo requiere validación contra lecturas reales — un warmup corto ya fue sospechoso de lecturas erráticas en julio. Documentado en `src/config.h`.
+
+**Verificado en hardware**: los módulos INA219 **no tienen LED de alimentación** (confirmado por Mau, 2026-07-29). Era la duda que quedaba, porque un LED a 1-3 mA por módulo habría superado a todo lo demás junto y `powerSave()` no lo apaga.
+
+**Sigue pendiente de power management**: `src/battery.h` continúa vacío y el sistema de tiers sin implementar. Ojo con la premisa: los tiers **no ahorran en deep sleep** — GPIO7/GPIO8 no son RTC GPIOs en el ESP32-C3, así que al dormir quedan sin drive y el pull-down de 9,9 kΩ corta ambos rails solo. El ahorro real de los tiers está en T3/T4, que cambian el *intervalo* de sleep, no en los rails.
 
 ## Sistema de logs del nodo — completo en los tres repos y validado en campo (2026-07-28)
 
 Diseño completo en [`weather-station-station-iot/logging_system_design.md`](./weather-station-station-iot/logging_system_design.md), que es el contrato para los tres repos. **Firmware, backend y frontend implementados; el flujo entero se probó end-to-end contra el nodo real** — armar captura, dejarla correr, entrar a service mode, transferir 177 eventos en 4 páginas y borrar con confirmación. **Desplegado y en producción** (ver arriba).
 
-**El problema**: el nodo en campo no tiene observabilidad. `LOG_V`/`LOG_E` son `Serial.printf` y con `LOG_LEVEL=0` compilan a no-op, así que la única forma de ver algo es abrir la caja estanca y enchufar USB. El disparador concreto sigue siendo el ~17% de ciclos sin telemetría, donde hoy no se puede saber si falla WiFi o MQTT.
+**El problema**: el nodo en campo no tiene observabilidad. `LOG_V`/`LOG_E` son `Serial.printf` y con `LOG_LEVEL=0` compilan a no-op, así que la única forma de ver algo es abrir la caja estanca y enchufar USB. El disparador concreto fue la pérdida de ciclos sin telemetría —que se creía del ~17% y resultó ser del 42%, ver arriba—, donde no se podía saber si fallaba WiFi o MQTT. La herramienta cumplió: descartó WiFi, cuantificó el fallo de MQTT y, cruzada contra InfluxDB, destapó que `LOG_PUBLISH_OK` no prueba entrega.
 
 **El modelo**: como el logging de un router comercial —acumula hasta un límite, pisa lo viejo, se consulta— pero **activable a demanda**, porque el nodo cuida cada mA. El operador sabe cuándo lo necesita, igual que sabe cuándo conviene flashear según el SoC.
 
@@ -145,7 +206,9 @@ Verificado con una instancia de backend apuntada a `station/99` para no tocar el
 
 Repaso completo del firmware antes de flashear, en dos tandas (`968bb55` y `d84edf9`). Todo esto entró en el `1.2.0` que hoy corre en campo:
 
-- **Keepalive de MQTT 15 s → 60 s.** El default de `PubSubClient` es 15 s: un solo PINGREQ/PINGRESP perdido tumba la conexión, y en el enlace marginal de campo eso pasa seguido. Es el gatillo más probable de las caídas que cortaban y reiniciaban el service mode. Gratis en el ciclo normal, donde el nodo está despierto ~10 s y el keepalive nunca llega a dispararse.
+- **Keepalive de MQTT 15 s → 60 s.** El default de `PubSubClient` es 15 s: un solo PINGREQ/PINGRESP perdido tumba la conexión, y en el enlace marginal de campo eso pasa seguido. Es el gatillo más probable de las caídas que cortaban y reiniciaban el service mode. Se lo dio por gratis en el ciclo normal, donde el nodo está despierto 3,3 s y el keepalive nunca llega a dispararse.
+
+  > ⚠️ **Revisar en la sesión de MQTT (2026-07-29): "gratis" puede ser falso.** El keepalive no sólo gobierna el PING del cliente — también define cuánto tarda el broker en dar por muerta una sesión (1,5 ×). A 60 s son 90 s, más que el ciclo de ~63 s del nodo, así que cada reconexión encuentra la sesión anterior viva y fuerza un takeover por client-ID duplicado. Es la hipótesis principal del 42% de pérdida. Ver la sección del principio.
 - **Socket timeout 15 s → 5 s.** También se pagaba entero cada vez que la conexión fallaba: en el ~17% de ciclos que no publican eran 15 s extra despierto a 50-140 mA por nada. De paso acota `_reconnectMqtt`: peor caso de 5×(15+2)=85 s a 5×(5+2)=35 s.
 - **`timeout_min` negativo rompía el presupuesto por overflow.** `parseCommand` aplicaba techo pero no piso, y el operador `|` de ArduinoJson solo usa el default si la clave falta o es de otro tipo — no si es ≤ 0. Con `{"timeout_min":-5}`, el `(uint32_t)timeoutMin * 60` de `serviceMode_run()` daba una sesión de ~136 años, exactamente lo contrario de lo que el timeout tiene que garantizar. Alcanzable desde la consola de JSON crudo de la UI. Ahora se clampea a `[1, SERVICE_MODE_MAX_TIMEOUT_MIN]`.
 - **El acumulador de tiempo sobrevivía al flasheo.** El reinicio del OTA pasa dentro de `ArduinoOTA.handle()` y nunca pasa por `serviceMode_exit()`, así que `rtc_serviceElapsedSec` conservaba lo consumido antes del flash: si la sesión venía de arrastre, la post-flash nacía sin presupuesto y el nodo se dormía antes de publicar el `service_mode_active` con la versión nueva — que es de donde la UI saca la verificación del OTA. Ahora `onEnd` lo pone en cero.
@@ -154,11 +217,13 @@ Repaso completo del firmware antes de flashear, en dos tandas (`968bb55` y `d84e
 
 ### Flaggeado en la revisión de firmware, para otra sesión (no bloquea el flasheo)
 
-- **`waitForRetainedCommand()` paga 800 ms fijos en casi todos los ciclos.** El loop espera hasta `MQTT_RETAINED_WAIT_MS` a que llegue un retenido, y sale antes solo si efectivamente hay uno — o sea que la mayoría de los ciclos, que no tienen comando, esperan los 800 ms completos despiertos a 50-140 mA. Sobre un tiempo despierto de ~10 s es ~8%, del orden de 30 mAh/día sobre un pack de 1500. **Corregido 2026-07-28: el despierto real son 3,3 s, así que son el 24% — ver la sección del ~17% arriba.** **No tocado a propósito**: acortarlo es un tradeoff, no una mejora gratis. El broker manda los retenidos apenas responde el SUBACK y `PubSubClient::subscribe()` no espera confirmación, así que un margen demasiado corto haría que el nodo se **pierda** comandos de mantenimiento — que es bastante peor que el costo energético. Medir el tiempo real hasta el primer retenido antes de bajarlo.
+- **`waitForRetainedCommand()` paga 800 ms fijos en casi todos los ciclos.** El loop espera hasta `MQTT_RETAINED_WAIT_MS` a que llegue un retenido, y sale antes solo si efectivamente hay uno — o sea que la mayoría de los ciclos, que no tienen comando, esperan los 800 ms completos despiertos a 50-140 mA. Sobre un tiempo despierto de ~10 s es ~8%, del orden de 30 mAh/día sobre un pack de 1500. **Corregido 2026-07-28: el despierto real son 3,3 s, así que eran el 24%.** **Y desde el `1.5.0` (2026-07-29) esto dejó de ser una palanca**: con el rail-on adelantado, el warmup del DHT22 pasó a ser el término que fija el piso del despierto, así que lo que se recorte acá lo absorbe el warmup y el total no baja — ver "Power management" arriba. **No tocado a propósito** también por otro motivo: acortarlo es un tradeoff, no una mejora gratis. El broker manda los retenidos apenas responde el SUBACK y `PubSubClient::subscribe()` no espera confirmación, así que un margen demasiado corto haría que el nodo se **pierda** comandos de mantenimiento — que es bastante peor que el costo energético. Medir el tiempo real hasta el primer retenido antes de bajarlo.
 - **`system_mW` no es consumo real** y el `delay(2000)` de `LOG_LEVEL>0` — ya documentados más arriba y en `componentes_y_conexiones.md`.
 - **Rollback de OTA — evaluado el 2026-07-27, decisión: no se implementa por ahora.** Análisis completo en `weather-station-station-iot/aprendizajes_y_roadmap.md`. Dos correcciones a lo que se había anotado antes: la palanca es `verifyRollbackLater()` y no `verifyOta()` (que corre antes de `setup()` y no puede juzgar si el firmware funciona), y diferir la validación **no** te deja sin poder re-flashear, porque el `Update` de Arduino esquiva el `esp_ota_begin()` que tiene ese guard. Se descarta por costo/beneficio: de los bugs reales que aparecieron en este firmware, el rollback no habría atrapado ninguno. Se reconsidera si el firmware se vuelve más riesgoso de flashear.
 
 ### Pendiente que destapó la herramienta: ~17% de ciclos sin telemetría
+
+> **Superado el 2026-07-29** — el número real es 42% y la causa es otra. Ver la sección "Pérdida de telemetría" al principio del documento. Esto se conserva porque documenta cómo se detectó y descarta hipótesis que ya no hace falta volver a probar.
 
 El detector de huecos de `boot_count` mostró, apenas se encendió, que el nodo **pierde alrededor del 17% de los payloads**. Verificado de forma independiente contra InfluxDB (que se alimenta por N8N, otro camino): en una ventana de 45 min, 7 de 42 boots no dejaron telemetría — mismos `boot_count`, mismos timestamps que los que detectó el bridge nuevo. No es un artefacto del código nuevo.
 
