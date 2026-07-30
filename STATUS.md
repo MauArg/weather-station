@@ -123,6 +123,33 @@ Consecuencia que importa: **el broker está detrás de un salto inalámbrico**, 
 
 Detalle que no es síntoma aunque lo parezca: **el nodo no aparece en la lista de dispositivos del ONT**, y es esperable por dos motivos independientes — tiene IP estática, así que nunca pide un lease DHCP; y su tráfico va sólo al broker, dentro de la LAN, así que los frames nunca tocan el ONT. Los logs de `service quality of ipv4 DNS on wan1` del ONT también son ruido: son del monitoreo WAN, y el nodo no hace una sola consulta DNS (el broker está por IP).
 
+### Resultado con el stack completo: 41% → 12%, y el modo de falla se angostó (2026-07-29, noche)
+
+Medidos 32 ciclos de `1.9.0` con **todos** los cambios aplicados (SSID de IoT, `WIFI_POWER_SAVE 0`, los dos AP fuera de `ax`, canal 1): **4 perdidos = 12%**, contra el 41% del baseline. `z = 2,61`, **`p = 0,009`** — la mejora acumulada es real.
+
+**Pero no se puede atribuir a una perilla concreta.** Las ventanas intermedias no alcanzan: con SSID + power save y todavía `ax` en canal 11 daba 27% (p ≈ 0,26 contra el baseline, no significativo), y el salto a 12% coincide con "los dos AP sin `ax` + canal 1", pero 27% vs 12% por sí solo da p ≈ 0,14. Para separar cuál fue haría falta desandar de a una y medir ~100 ciclos por brazo. Anotado como deuda, no como conclusión.
+
+**El veredicto de los campos `pv_*`, que era el objetivo de la ventana:**
+
+| | n | `WiFi.status()` | `mqtt.state()` | despierto |
+|---|---|---|---|---|
+| ciclos que llegaron | 23 | `WL_CONNECTED` ×23 | conectado ×23 | 2292 ms (rango 2292-2294) |
+| ciclos perdidos | 4 | **`WL_CONNECTED` ×4** | **timeout ×4** | **5322 ms** (rango 5295-5344) |
+
+**El nodo nunca se entera.** En los cuatro ciclos perdidos cerró creyéndose asociado y con un RSSI normal (-62 a -64 dBm). O sea que **re-chequear `WiFi.status()` antes de publicar no sirve de nada** — siempre va a decir que sí. Eso descarta el arreglo barato que parecía posible.
+
+**El modo de falla se angostó, y eso cambia cuál es el arreglo correcto.** Los cuatro perdidos son la misma clase: `mqtt.connect()` que agota el socket timeout (`-4`). **No hay un solo ciclo de la otra clase** —conectar bien y perder el publish en silencio—, que era la dominante con 41%. En esta configuración la pérdida ocurre entera al principio del ciclo.
+
+**Y sale un costo energético que no estaba en ninguna cuenta**: un ciclo perdido queda despierto **5322 ms contra 2292 ms** de uno sano, porque paga entero el `setSocketTimeout(5)`. Al 41% de pérdida eso era ~50% más consumo de la ventana activa del presupuestado; al 12% es ~+16%.
+
+### El arreglo que corresponde al modo de falla que quedó
+
+`connectMQTT()` falla → hoy `main.cpp` se va directo a `goToDeepSleep()`. El pendiente que estaba anotado como "reintentar `mqtt.connect()` en el ciclo normal" **no alcanzaría**, y ahora se sabe por qué: el enlace está muerto, así que un segundo intento sobre el mismo socket volvería a agotar el timeout. Lo que hace falta es **forzar una re-asociación de WiFi** (`WiFi.disconnect()` + `WiFi.begin()`, porque `WiFi.status()` miente) y recién ahí reintentar MQTT.
+
+Se paga sólo en el ~12% de ciclos que fallan, que además ya están quemando 5,3 s. Si funciona, la pérdida debería irse a ~0 y esos ciclos pasarían a costar ~7 s.
+
+La **confirmación de entrega en banda** (eco del propio topic + republish) queda en reserva: es el arreglo para la otra clase de falla, la que hoy no aparece pero dominaba con la config vieja.
+
 ### Lo que sigue: 802.11ax en 2,4 GHz
 
 **Hipótesis actual.** Las dos radios de 2,4 GHz se anuncian como **`802.11ax`** —incluida la SSID de IoT— y el ESP32-C3 es b/g/n. El mecanismo candidato no es una incompatibilidad genérica sino algo concreto: un AP WiFi 6 anuncia parámetros que un cliente legacy tiene que interpretar (**MU-EDCA**, sesiones de block-ack de **OFDMA**), y un cliente que los procesa mal **deja de transmitir sin perder la asociación**. Esa es exactamente la firma medida, y encaja con que apagar el power save no cambiara nada, porque no tiene relación con dormir la radio.
