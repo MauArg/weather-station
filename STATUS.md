@@ -100,6 +100,34 @@ Con esto, todo lo medido antes encaja sin hipótesis extra:
 - El `DISCONNECT` que nunca llegaba al broker, y con él la sesión colgada que provocaba el takeover por client-ID duplicado en Mosquitto. Era este mismo fenómeno una capa más arriba.
 - La no correlación con el RSSI **del nodo**, y la no correlación con el tamaño de frame (un management frame de 30 B falla igual que un PUBLISH de 503 B — no es tamaño, es margen).
 
+### Confirmación con una hora de sniffer + broker en paralelo (2026-07-30)
+
+59 ciclos sobre `1.10.0` (power save ya restaurado), con el sniffer y el `brokerprobe` corriendo juntos y cruzados por reloj de pared. **16 perdidos = 27%.**
+
+| grupo | n | RSSI del nodo en el AP | % de tramas con RETRY | tramas | duración |
+|---|---|---|---|---|---|
+| ciclos que llegaron | 42 | **-74 dBm** | **16%** | 26 | 2421 ms |
+| ciclos perdidos | 15 | **-74 dBm** | 37% | 36 | 5427 ms |
+
+**El RSSI es idéntico entre los dos grupos.** La diferencia de reintentos NO sirve para explicar nada: es casi tautológica, porque un ciclo perdido es por definición uno cuyas tramas no fueron reconocidas, y cada no-reconocimiento genera un reintento. El dato que sí importa y no es circular es otro:
+
+> **Hasta los ciclos SANOS tienen 16% de reintentos.** Un enlace sano está en 1-5%.
+
+Y la tasa global se mueve muchísimo con el ambiente — medida en tercios de esa misma hora: **29% → 54% → 41%**.
+
+**Cómo se decide entonces cuál ciclo se pierde.** Mirando las rachas de reintentos consecutivos aparece una distribución bimodal: 133 rachas cortas (1-3 reintentos, la trama termina pasando) y **20 rachas de 10 o más**, que es el límite de reintentos agotándose y la trama descartada. Esas 20 se corresponden bien con los 15 ciclos perdidos.
+
+O sea: **el margen malo explica el régimen (por qué se pierde ~1 de cada 4), pero no cuál ciclo cae — eso lo decide que una racha de fallos consecutivos agote el límite.** Es una buena noticia para el plan: cada dB que se gane baja la probabilidad de fallo por trama, y como las rachas son potencias de esa probabilidad, la tasa de pérdida debería bajar **más que proporcionalmente**.
+
+### ⚠️ Corrección de método: las comparaciones entre ventanas tienen un confundidor ambiental
+
+La no-estacionariedad medida arriba (29% → 54% de reintentos **dentro de una misma hora**) obliga a bajarle el precio a todas las comparaciones entre ventanas tomadas en momentos distintos:
+
+- **Power save ON vs OFF**: 4/32 = 12% (anoche 22:20) contra 16/59 = 27% (hoy 11:13). `z = -1,61`, `p = 0,11` — **no significativo**, y encima cambió la hora del día junto con el setting. No se puede atribuir.
+- **El 41% → 12% atribuido al stack de cambios del router** también queda más débil de lo que parecía. El `p = 0,009` sigue siendo el número correcto, pero suponía que las dos ventanas eran comparables salvo por los cambios — y ahora sabemos que el ambiente solo mueve la tasa en ese orden.
+
+Para cualquier A/B futuro que importe: **medir los dos brazos alternados en la misma franja horaria**, o aceptar que sólo se pueden detectar efectos grandes.
+
 ### Qué hacer, por costo creciente
 
 1. **`WiFi.setTxPower()` al máximo** y verificar con `getTxPower()` qué está usando hoy. Es una línea y puede que ya esté al máximo, pero hay que mirarlo antes de suponerlo.
