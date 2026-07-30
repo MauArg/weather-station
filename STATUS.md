@@ -92,9 +92,50 @@ El publish de telemetría sale a los ~2290 ms, así que sólo los ciclos del ter
 
 **Descartado el tamaño de frame**, que era la otra lectura posible de "el CONNECT de 67 B pasa y el PUBLISH de 503 B no": pings alternados de 32 B y 470 B *dentro* de la ventana despierta dan 88,3% y 91,7% de éxito. El grande no falla más que el chico.
 
-**Sospechoso principal: el modem sleep** (`WIFI_PS_MIN_MODEM`, que es el default del Arduino-ESP32). Dos indicios: los pings vuelven en **42-54 ms dentro de una LAN**, que es el AP guardando el paquete hasta el DTIM del nodo; y agregar tráfico de bajada durante la ventana hace que la asociación muera **antes**, no después. `1.8.0` lo apaga (`WIFI_POWER_SAVE 0`) — es el A/B pendiente, y cuesta ~+22 mAh/día si resulta ser el fix, medibles con el propio `system_mA` de la telemetría.
+### Dos hipótesis probadas y descartadas (2026-07-29, noche)
 
-**La bifurcación que falta resolver, y es del router**: ¿el AP le manda un deauth al nodo, o el nodo se queda sordo solo? Si hay deauth en el log del router para `80:F1:B2:6D:F9:FC`, el reason code nombra la causa y el fix es del lado del router (band steering / 802.11k-v-r / rekey). Si no hay deauth, la radio del nodo se apaga sola y el fix es `WiFi.setSleep(false)`.
+Se flashearon las dos juntas —SSID nueva + `WIFI_POWER_SAVE 0`— y se midieron 33 ciclos de `1.8.0`. **Ninguna resolvió el problema.**
+
+**Resultado: 9 perdidos de 33 = 27%**, contra el 41% del baseline. Parece mejora pero **no lo es estadísticamente**: dos proporciones, z = 1,13, p ≈ 0,26. Con estos tamaños de muestra no se puede distinguir de 41%. Y la firma es idéntica — `publish/messages/received` = 24 = las 24 entregadas, y los ciclos perdidos entregan al broker sólo el CONNECT (~62-70 B) o CONNECT+SUBSCRIBE (~152 B).
+
+**El modem sleep queda descartado, y esta vez con la verificación hecha.** Era fácil que `WiFi.setSleep(false)` no tomara efecto (el modo se aplica sobre el driver ya inicializado y `WiFi.begin()` puede pisarlo), así que se comprobó por fuera del firmware, midiendo el RTT de ICMP:
+
+| | mediana | mínimo |
+|---|---|---|
+| `1.5.0`, power save por default | 42 ms | — |
+| `1.8.0`, `WIFI_POWER_SAVE 0` | **7 ms** | 3 ms |
+
+La línea funcionó —el AP dejó de bufferizar hasta el DTIM— y **aun así la asociación se sigue muriendo**. O sea que dormir la radio no era la causa.
+
+**El band steering queda muy debilitado**: `Ire y Mau IoT` tiene un solo BSSID, en una sola banda y en un solo AP, así que no hay nada hacia donde stearlo, y el fenómeno persiste igual.
+
+**Dato nuevo que sí quedó**: incluso con power save apagado, 5 de 57 respuestas ICMP tardan **108-494 ms** en una LAN. Eso es reintento a nivel MAC, y apunta a contienda de aire o al comportamiento del AP, no a margen de RF (el RSSI sigue clavado en -64 dBm y es idéntico en los ciclos que llegan y en los que no).
+
+### Topología de red, que resultó ser parte del problema (2026-07-29)
+
+No es una red doméstica estándar y conviene tenerlo escrito:
+
+- **ONT/router del ISP** (Huawei EchoLife EG8041V5), `192.168.18.1` — hace de **servidor DHCP** de toda la casa. El ISP no lo pone en bridge. Su WiFi no se usa.
+- **AX3000 "principal"** — colgado del ONT por ethernet gigabit, hace de AP. Acá se asocia el nodo.
+- **Segundo AX3000 idéntico**, a 2 m del primero, unido por **WiFi**, y detrás de él por ethernet: la RPi del broker/N8N/backend, el NAS con InfluxDB y el smart TV. Se hizo así porque no se puede tirar cable hasta ese rack.
+
+Consecuencia que importa: **el broker está detrás de un salto inalámbrico**, y los dos AX3000 son una **mesh**, no un puente tonto. El escaneo lo confirma — `Ire y Mau` tiene **cuatro BSSIDs** (dos por AP, uno por banda), y **las dos radios de 2,4 GHz están en el mismo canal 11**, a dos metros una de la otra.
+
+Detalle que no es síntoma aunque lo parezca: **el nodo no aparece en la lista de dispositivos del ONT**, y es esperable por dos motivos independientes — tiene IP estática, así que nunca pide un lease DHCP; y su tráfico va sólo al broker, dentro de la LAN, así que los frames nunca tocan el ONT. Los logs de `service quality of ipv4 DNS on wan1` del ONT también son ruido: son del monitoreo WAN, y el nodo no hace una sola consulta DNS (el broker está por IP).
+
+### Lo que sigue: 802.11ax en 2,4 GHz
+
+**Hipótesis actual.** Las dos radios de 2,4 GHz se anuncian como **`802.11ax`** —incluida la SSID de IoT— y el ESP32-C3 es b/g/n. El mecanismo candidato no es una incompatibilidad genérica sino algo concreto: un AP WiFi 6 anuncia parámetros que un cliente legacy tiene que interpretar (**MU-EDCA**, sesiones de block-ack de **OFDMA**), y un cliente que los procesa mal **deja de transmitir sin perder la asociación**. Esa es exactamente la firma medida, y encaja con que apagar el power save no cambiara nada, porque no tiene relación con dormir la radio.
+
+Orden propuesto, de a una perilla por vez y midiendo 35 min cada una:
+
+1. Banda de 2,4 GHz: de `802.11b/g/n/ax mixed` a **`802.11b/g/n mixed`**.
+2. Si no alcanza o no existe esa opción: **apagar OFDMA**.
+3. Independiente del resultado, es sano igual: **separar los canales de los dos AX3000** (hoy los dos en el 11, a 2 m). Del escaneo de vecinos, el canal 1 está bastante libre.
+
+**Pendiente de método**: `WIFI_POWER_SAVE` se deja en 0 **a propósito** mientras se prueba el router, para no mover dos variables. Cuando el router quede resuelto hay que volver a ponerlo en 1 y remedir — son ~22 mAh/día sobre un presupuesto activo de ~47, y ya está probado que no compra nada.
+
+**Sigue sin descartar**: que la alimentación se caiga en los picos de transmisión. El `brokerprobe` guardaba sólo cuatro campos y `system_v` se perdía, así que no se pudo cruzar; ya está corregido para que guarde el payload entero.
 
 > Se conserva más abajo lo que sigue siendo válido de las hipótesis anteriores, incluida la del keepalive/takeover — que **no** explica la pérdida, pero cuyo `1.6.0` se mantiene por ser correcto por sí mismo.
 
