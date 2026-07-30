@@ -72,6 +72,43 @@ Corregido con antigüedad relativa (`formatAge()`, que devuelve null por debajo 
 
 De paso se revisó el camino de limpieza del SSE por si había un leak de suscriptores, que era la otra lectura posible del síntoma: `HandleStream` cierra con `defer Unsubscribe` y sale por `r.Context().Done()`, y `broadcast()` es no bloqueante. **No había nada que arreglar ahí.**
 
+## 🎯 CAUSA RAÍZ: el enlace es asimétrico y el uplink del nodo está al límite (2026-07-30)
+
+**Encontrada con el sniffer 802.11.** No es el AP echando al nodo, no es steering, no es el driver colgado. **El nodo transmite y el AP no lo escucha.**
+
+Las tres mediciones del aire, con el sniffer al lado del AP (o sea, oyendo aproximadamente lo que oye el AP):
+
+| | mediana | rango | n |
+|---|---|---|---|
+| tramas **del nodo** | **-74 dBm** | -76 a -72 | 100 |
+| tramas **del AP** | **-16 dBm** | -24 a -13 | 229 |
+
+- **El 34% de las tramas del nodo salen con el bit RETRY.** Un enlace sano está en un dígito.
+- **Ninguna trama de deauth/disassoc proviene del AP.** Las 25 que aparecieron en una ráfaga son del **nodo hacia el AP**, con `reason=8` ("la estación se está yendo del BSS"): es el `WiFi.disconnect(true)` de `goToDeepSleep()`. El nodo se despide, lo retransmite **25 veces** —24 con RETRY— y el AP no se lo reconoce ni una sola vez.
+
+### Por qué esto invalida el análisis anterior, y no un poco
+
+**Todo el descarte de "no correlaciona con el RSSI" usaba el RSSI equivocado.** `WiFi.RSSI()` mide lo que el nodo **recibe** del AP: -62/-64 dBm, saludable. La dirección que falla es la otra, y el nodo no tiene forma de medirla. Son **12 dB de asimetría** entre los dos sentidos del mismo enlace.
+
+Y hay un agravante documentado que ahora se lee al revés: en su momento se subió el router **al máximo de potencia** porque "en medium el nodo no conectaba". Eso mejoró el downlink —el único que se estaba mirando— y **no hizo absolutamente nada por el uplink**, que es el que falla. Enmascaró el síntoma.
+
+Con esto, todo lo medido antes encaja sin hipótesis extra:
+
+- El enlace "se muere en los dos sentidos" porque el uplink agota los reintentos: el AP sí le llega al nodo, pero los ACK del nodo no vuelven, así que el AP también deja de insistir.
+- El `LOG_PUBLISH_OK` engañoso: el nodo entrega los bytes a lwIP y nunca sabe que el frame no fue reconocido.
+- Los ciclos perdidos que cierran con `WL_CONNECTED`: nadie lo desasoció, simplemente no lo oyen.
+- El `DISCONNECT` que nunca llegaba al broker, y con él la sesión colgada que provocaba el takeover por client-ID duplicado en Mosquitto. Era este mismo fenómeno una capa más arriba.
+- La no correlación con el RSSI **del nodo**, y la no correlación con el tamaño de frame (un management frame de 30 B falla igual que un PUBLISH de 503 B — no es tamaño, es margen).
+
+### Qué hacer, por costo creciente
+
+1. **`WiFi.setTxPower()` al máximo** y verificar con `getTxPower()` qué está usando hoy. Es una línea y puede que ya esté al máximo, pero hay que mirarlo antes de suponerlo.
+2. **Antena y orientación del nodo dentro de la caja estanca.** Es donde más margen hay para ganar dB gratis: una antena de PCB cerca de la batería, del cableado o de la propia PCB pierde muchísimo. Vale medir con el sniffer antes y después de mover la placa dentro de la caja.
+3. **Acercar un AP al nodo.** Hoy los dos AX3000 están a **2 m uno del otro**, con lo cual el segundo no aporta cobertura. Reubicarlo cambiaría el problema de raíz — la limitación es que sostiene por cable a las RPi y la tele.
+4. **Bajar el ruido del canal.** El canal 1 solapa con `Stitch` (canal 3, 82% de señal, **25% de uso de canal**). A -74 dBm de señal útil, el ruido del vecino pesa. El canal 11 se veía más limpio.
+
+**El fix de la re-asociación al fallar `mqtt.connect()` sigue teniendo sentido** —recupera ciclos cuando el enlace se recompone— pero ahora se entiende como paliativo, no como solución: si el AP no oye al nodo, reasociarse tampoco lo va a oír.
+
 ## ⚠️ Pérdida de telemetría — DÓNDE RETOMAR (fin de la sesión del 2026-07-29)
 
 Estado al cerrar: la pérdida bajó de **41% a 12%** (significativo, `p = 0,009`) y el modo de falla quedó acotado a una sola clase. Lo que hay que hacer, en orden:
