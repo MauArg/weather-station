@@ -72,6 +72,31 @@ Corregido con antigüedad relativa (`formatAge()`, que devuelve null por debajo 
 
 De paso se revisó el camino de limpieza del SSE por si había un leak de suscriptores, que era la otra lectura posible del síntoma: `HandleStream` cierra con `defer Unsubscribe` y sale por `r.Context().Done()`, y `broadcast()` es no bloqueante. **No había nada que arreglar ahí.**
 
+## ⚠️ Pérdida de telemetría — DÓNDE RETOMAR (fin de la sesión del 2026-07-29)
+
+Estado al cerrar: la pérdida bajó de **41% a 12%** (significativo, `p = 0,009`) y el modo de falla quedó acotado a una sola clase. Lo que hay que hacer, en orden:
+
+1. **Implementar la re-asociación al fallar `mqtt.connect()`** — es el arreglo que corresponde al 12% que queda, y está justificado abajo. **No estaba empezado al cerrar la sesión.**
+2. **Terminar la captura con el sniffer**, que quedó a mitad de camino por un problema de puerto serie, no del sniffer (detalle más abajo). Es opcional: contesta *por qué* se muere el enlace, no hace falta para arreglarlo.
+3. **Volver `WIFI_POWER_SAVE` a 1** y remedir. Está en 0 sólo para no mover dos variables mientras se probaba el router; ya se demostró que no compra nada, y cuesta ~22 mAh/día.
+
+Lo que corre en campo al cerrar: **`1.9.0`**, con la SSID `Ire y Mau IoT`, `WIFI_POWER_SAVE 0` y los campos `pv_*` de diagnóstico. Router: 2,4 GHz en canal 1, sin `ax`, los dos AP.
+
+**Herramientas nuevas, que hacen barato repetir cualquier medición** (antes esto costaba una captura de logs y una sesión de service mode; ahora son 35 min desde la LAN):
+
+- `brokerprobe` (Go, en el scratchpad de la sesión) — suscriptor propio que además lee los contadores `$SYS` del broker. Da la tasa de pérdida y si el PUBLISH entró al broker.
+- `linkstate.py` / `analyze.py` — cruzan los `pv_*` y la aritmética de bytes.
+- `pingstorm.ps1` — sondeo ICMP que acota cuándo muere el enlace dentro del ciclo.
+- `tools/wifi-sniffer/` (versionado, en el repo del firmware) — captura 802.11 en modo promiscuo sobre una ESP32-S3 de banco.
+
+### El sniffer quedó listo pero sin capturar todavía
+
+No es un problema del sniffer: la placa arrancaba en **modo descarga** (`rst:0x15, boot:0x23 (DOWNLOAD(USB/UART0))`, "waiting for download"), esperando un flasheo que nunca llegaba, y por eso no imprimía nada. Lo causó tocar RTS a mano para "resetearla" — en el USB-Serial-JTAG del S3, DTR y RTS gobiernan IO0 y EN con lógica propia del periférico, así que cualquier toque se interpreta como secuencia de arranque. El monitor de PlatformIO probablemente hacía lo mismo al abrir el puerto.
+
+**Para retomar**: el `platformio.ini` del sniffer ahora tiene dos entornos y el default es `s3_uart`, que saca el `Serial` por UART0 — hay que **enchufar el cable en el conector rotulado `UART`**, no en el `USB`. Ese es un puente USB-serie común, sin re-enumeración en cada reset ni rarezas de strapping. Se agregó además un latido cada 15 s, porque el nodo transmite 2,3 s cada 63 y sin eso no hay forma de distinguir "vivo y esperando" de "colgado".
+
+Qué buscar en la captura, que son tres ramas mutuamente excluyentes: el nodo **sigue transmitiendo** con `Retry=1` y sin ACK (el AP lo dio de baja), el nodo **deja de transmitir** (se colgó su driver), o aparece un **deauth/disassoc** con su reason code.
+
 ## ⚠️ Pérdida de telemetría: se muere la ASOCIACIÓN WIFI a mitad del ciclo (2026-07-29, sesión dedicada)
 
 **Localizado, y una capa entera más abajo de donde se lo venía buscando.** No es el broker, no es la entrega a los suscriptores, no es MQTT, no es TCP y no es el margen de RF. **El nodo se asocia bien, y unos cientos de milisegundos o unos segundos después deja de estar en la red — en los dos sentidos.** Todo lo demás que se venía midiendo son consecuencias de en qué punto del ciclo cae ese corte.
