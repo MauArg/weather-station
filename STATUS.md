@@ -96,16 +96,22 @@ De paso se revisó el camino de limpieza del SSE por si había un leak de suscri
 
 ## ✅ RESUELTO: forzar 802.11b lleva la pérdida de 39% a 0% (2026-07-30)
 
-**`1.12.0` con `esp_wifi_set_protocol(WIFI_IF_STA, WIFI_PROTOCOL_11B)` — 40 ciclos consecutivos, cero perdidos.**
+**`1.12.0` con `esp_wifi_set_protocol(WIFI_IF_STA, WIFI_PROTOCOL_11B)`.**
 
-A/B limpio, el mismo día y con una hora de diferencia, con el único cambio de firmware siendo ese:
+**Confirmado sobre 18 h de InfluxDB (2026-07-31), un único dataset homogéneo que abarca los dos firmwares:**
 
-| | ventana | perdidos |
-|---|---|---|
-| `1.11.0` (tasas OFDM, el default) | 16:27-17:29 | **22/57 = 39%** |
-| `1.12.0` (forzado a 11b) | 18:34-19:16 | **0/40 = 0%** |
+| firmware | ventana | ciclos | perdidos |
+|---|---|---|---|
+| `1.11.0` (tasas OFDM, el default) | 1,85 h | 107 | **37 = 34,6%** |
+| `1.12.0` (forzado a 11b) | **16,05 h** | **922** | **3 = 0,3%** |
 
-`z = 4,47`, `p = 7,9 × 10⁻⁶`. Y contra el mejor régimen que se había visto nunca (12%), la probabilidad de 40 ciclos limpios seguidos por azar es 0,6%. No es la no-estacionariedad ambiental: eso movía la tasa entre 12% y 41%, nunca a cero.
+`z = 17,4`, `p = 1,9 × 10⁻⁶⁷`. **Una reducción de 106×**, y ya no sobre una ventana elegida: 922 ciclos cubriendo una noche entera. Queda **una pérdida cada 307 ciclos, o sea una cada 5,4 h.**
+
+Las tres pérdidas fueron a las **23:11**, **06:09** y **06:10** local — las dos últimas consecutivas, probablemente un mismo evento de dos ciclos. No hay patrón horario ni agrupamiento que sugiera una causa sistemática remanente.
+
+Esto además **cierra el problema del confundidor ambiental** que arrastraba toda la investigación: al venir los dos brazos del mismo dump y cubrir el `1.12.0` un ciclo día/noche completo, ya no hay forma de que la mejora sea un artefacto de la hora en que se midió.
+
+_(Medición anterior, más chica, que ya apuntaba a lo mismo: 22/57 = 39% contra 0/40 = 0%, `p = 7,9 × 10⁻⁶`.)_
 
 **Por qué funciona.** A 1-11 Mbps (DSSS) la sensibilidad requerida es 5-10 dB menor que en OFDM. El enlace del nodo estaba justo en el margen —lo dice todo lo medido antes: 16% de reintentos hasta en los ciclos sanos, rachas de 10+ reintentos agotando el límite— y bajar la tasa compra exactamente los dB que faltaban. El costo es tiempo de aire: una trama de 660 B tarda 0,5 ms a 11 Mbps contra 0,1 ms a 54, irrelevante en un nodo que transmite un puñado de tramas por minuto.
 
