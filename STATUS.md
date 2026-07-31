@@ -134,6 +134,12 @@ El control es que **el AP quedó 6 dB peor** mientras el nodo pasaba de inaudibl
 
 La intervención resultó correcta igual, porque el mecanismo físico que la justifica —tasas bajas necesitan menos margen— era cierto por su cuenta y estaba sostenido por el resto de la evidencia.
 
+### Limpieza de cierre (2026-07-31)
+
+- **`1.13.0` saca los campos `pv_*` y el código de las balizas.** Los `pv_*` contestaron su pregunta y el detector de huecos de `boot_count` ya da la tasa de pérdida gratis; salen 55 B del payload (581 → ~526 B de 741), margen que va a querer el subsistema de viento. Las balizas nunca se flashearon en campo, así que era código muerto. Ambos vuelven con un revert si hacen falta.
+- **El instrumental se versionó en [`weather-station-station-iot/tools/brokerprobe/`](./weather-station-station-iot/tools/brokerprobe/)**, con README. Antes vivía en el scratchpad de la sesión, que es temporal — y `STATUS.md` lo referenciaba desde ahí. Es lo que bajó el costo de medir la pérdida de una noche a 35 minutos.
+- **Bug de InfluxDB corregido de paso** (backend): los puntos llevan un tag `firmware`, así que `from()` devolvía una serie por versión y `last()` contestaba una vez por cada una — el dashboard mostraba la que ordenara primero alfabéticamente, con dato "en vivo" congelado 8 h en el pasado. Lo destapó esta sesión sin querer, al dejar ~7 versiones dentro de la ventana de 24 h.
+
 ### Pendientes que deja
 
 - **Confirmar en una ventana larga** (varias horas, distintos momentos del día) que el 0% se sostiene. 40 ciclos son concluyentes contra el 39%, pero no dicen nada sobre el comportamiento nocturno o con lluvia.
