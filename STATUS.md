@@ -706,7 +706,7 @@ Importa por energía, no solo por datos: un ciclo que falla la conexión puede q
 
 Objetivo original según `Fase_2_ESP32_Solar_Migration.md`: migración NodeMCU ESP8266 → FireBeetle ESP32 + alimentación solar autónoma, deep sleep <50µA, 30+ días de autonomía. **Estado real (2026-07-11)**: prototipo v1 (dos perfboards, con cold solder joints) desplegado y funcionando al aire libre en la ubicación de campo — ver `weather-station-station-iot/componentes_y_conexiones.md` → "Estado actual en campo". El documento de Fase 2 quedó desactualizado como plan; se conserva como referencia de objetivos.
 
-**Actualizado 2026-07-23** — PCB v2 (FR4 casera, transferencia de tóner + cloruro férrico, main + aux) **armada y funcionando correctamente**. En prueba de 12h dentro de la caja estanca antes de aplicar el barniz protector sobre la cara de pistas/soldaduras. Ver `weather-station-station-iot/componentes_y_conexiones.md`.
+**Actualizado 2026-07-31 — la PCB v2 está en campo, barnizada y es lo que corre hoy.** FR4 casera (transferencia de tóner + cloruro férrico, main + aux), armada, **con doble capa de barniz aislante aplicada** sobre la cara de pistas/soldaduras, y desplegada. **El prototipo de dos perfboards con cold solder joints ya no está en servicio.** Ver `weather-station-station-iot/componentes_y_conexiones.md`.
 
 Dos problemas de armado encontrados y resueltos en esta sesión:
 
@@ -725,13 +725,28 @@ Si se retoma, tener en cuenta:
 - Lo que resolvería: mapeo pin-de-símbolo ↔ pad-de-footprint explícito y verificable con cross-probe, visor 3D para confirmar orientación real del TO-92 sobre el pad, y export para toner transfer con control de espejado explícito por capa.
 - Lo que **no** desaparece: el TO-92 tiene varios footprints en la librería de KiCad con distinto orden de pin 1 y distinta convención de panza. Hay que elegir el que corresponda al BC337 real (C-B-E con plano de frente) y verificar pad→net antes de rutear.
 
-## Issue de fallas I2C intermitentes — resuelto por la PCB v2 (confirmación final pendiente)
+## Issue de fallas I2C intermitentes — CERRADO (2026-07-31)
 
-**Actualizado 2026-07-23** — la causa real eran cold solder joints en las dos perfboards del prototipo (no el AS5600, que nunca se conectó — ver `i2c-bus-lockup-investigation.md` para la corrección de la hipótesis original). Los dos intermitentes remanentes eran el **INA219 solar** y el **DS18B20** (temp_sistema).
+**La causa real eran cold solder joints en las dos perfboards del prototipo** (no el AS5600, que nunca se conectó — ver `i2c-bus-lockup-investigation.md` para la corrección de la hipótesis original). Los dos intermitentes remanentes eran el **INA219 solar** y el **DS18B20** (temp_sistema).
 
-Al reemplazar las perfboards por la PCB v2, el nodo arrancó a la primera y viene **totalmente estable**, incluidos esos dos sensores. Como el prototipo con las juntas frías ya no está en servicio, el issue se considera resuelto.
+Al reemplazar las perfboards por la PCB v2 el nodo arrancó a la primera y viene **totalmente estable**, incluidos esos dos sensores. **El barniz protector ya está aplicado (doble capa)** y la placa lleva desde entonces corriendo en campo, con los cuatro `*_ok` de la telemetría en `true` de forma sostenida. El prototipo con las juntas frías no está en servicio. Issue cerrado.
 
-Confirmación final pendiente: prueba de ~19h en la caja estanca (2026-07-23 17:00 → 2026-07-24 mediodía), elegida para cubrir la madrugada con temperaturas bajo cero — el ciclo térmico es lo que expone una junta marginal. Si pasa limpia, el issue queda cerrado y se aplica el barniz protector.
+### Humedad dentro de la caja — anotado el 2026-07-31, sin acción de firmware
+
+En el primer payload del `1.13.1` la caja apareció **mucho más húmeda que el exterior**, invirtiendo la línea base:
+
+| | exterior (SHT31) | caja (DHT22) |
+|---|---|---|
+| 2026-07-25 (referencia) | 87-88% HR | **62,7%** — la caja más seca |
+| 2026-07-31 | 28,6 °C / 40,9% HR → 11,5 g/m³ | 32,9 °C / 88,6% HR → **31,3 g/m³** |
+
+La caja tiene **2,7× la humedad absoluta** del exterior, y no es efecto de temperatura: está más caliente, lo que debería bajarle la HR. El punto de rocío interior queda en 30,8 °C, apenas 2 °C por debajo de la temperatura de la caja.
+
+**Explicación probable y tranquilizadora**: los días previos fueron muy húmedos, con llovizna y 96% de HR exterior. Es humedad que entró en ese período y que ahora, con la caja caliente al sol, se evapora y se lee alta. **No es una alarma de falla eléctrica**: la placa es la PCB v2 con doble capa de barniz, no la perfboard que daba problemas.
+
+**Cómo distinguir transitorio de filtración, sin abrir nada**: si en 48-72 h la brecha vuelve a la referencia (caja más seca que el exterior), fue el arrastre del temporal. Si la caja se mantiene por encima del exterior con tiempo seco, entró agua y no se está yendo. El dato se registra en cada ciclo, así que la respuesta llega sola.
+
+Mau va a mirar la condensación físicamente cuando pueda. Esto es exactamente para lo que quedó el DHT22 como monitor de sellado.
 
 **Anterior (2026-07-11)**: resoldar varias juntas del prototipo mejoró mucho el problema pero no lo eliminó.
 
