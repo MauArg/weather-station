@@ -40,7 +40,33 @@ Mau pidió cerrarlo completo, así que se barrieron **todas** las queries Flux d
 
 Verificado endpoint por endpoint contra el InfluxDB de producción: `/weather/history/recent` (6h/24h/72h) y `/weather/history/day` quedan monótonos, el calendario baja a 109 filas para 109 días sin duplicados, y `/weather/current` devuelve una lectura de hace segundos. `go build`, `go vet` y `go test` limpios.
 
-### ⚠️ Bug distinto que salió a la luz: el calendario está corrido un día
+### ✅ El calendario corrido un día — arreglado, junto con el corte de día en hora local (2026-07-31)
+
+Mau lo confirmó mirando y pidió arreglarlo para que entre todo en el mismo deploy. Decidió además que **los días se corten en hora local (ART, UTC−3)** y que la UI lo diga en algún lado. Backend `2238ec4`, frontend `707b555`.
+
+Eran **dos causas independientes** que se sumaban:
+
+1. **`timeSrc` por defecto.** `aggregateWindow` rotula cada ventana con su borde de **cierre**, así que la ventana diaria quedaba estampada en la medianoche que la termina. Corregido con `timeSrc: "_start"`.
+2. **Ventanas cortadas en medianoche UTC**, o sea 21:00 local. Los extremos diarios se comían tres horas de la noche anterior. Corregido con `option location = timezone.location(name: "America/Argentina/Buenos_Aires")`, que además hace que `today()` resuelva en medianoche local. Alcanza a `GetYearlyTemperature`, `GetDailyRaw` y `GetDayHistory` — este último recibía del front una fecha armada con `getDate()` **local** y la leía como día UTC, así que estaba desalineado desde el vamos.
+
+**Los instantes siguen viajando en UTC**, y esto es lo que más importa no re-derivar: el contrato con el front es que **el browser localiza**. `ApiService.getDailyStats` le **agrega una `Z`** al clock string antes de convertir, así que mover la zona en la respuesta hace que reste tres horas **dos veces**. Se intentó y se revirtió — el bug sólo se ve en la UI renderizada, no en la API, que es donde casi se pasa por alto. Lo único que se movió a local son los **bordes de día**, que deciden qué filas existen y eso el browser no lo puede rehacer.
+
+Dos detalles de implementación que no son obvios: la zona va **nombrada y no como offset fijo de −3 h** (el offset es correcto para todo lo que hay en el bucket, pero el nombre sigue siéndolo si el país vuelve a mover los relojes, como hizo hasta 2009); y `time/tzdata` va **embebido en el binario** porque la imagen de runtime es `alpine` pelada sin zoneinfo — ahí `LoadLocation` no falla, **devuelve UTC en silencio**, que es exactamente el bug que esto arregla.
+
+| jul | antes | ahora |
+|---|---|---|
+| 26 | 10,05 / 7,75 | **21,59 / 4,21** |
+| 27 | 12,66 / 11,85 | **30,98 / 6,66** |
+| 28 | 30,98 / 6,66 | **22,99 / 5,31** |
+| 31 | 10,86 / 9,30 | **27,86 / 15,20** |
+
+Verificado **en la UI renderizada** además de en la API: los 30,98 °C pasan del 28 al 27, la celda de hoy coincide exacto con los extremos del día (28,4 / 15,2 — cosa que antes no podía pasar, porque cada uno usaba un día distinto), y el mínimo del día pasa a marcar `12:00 a. m.` en vez de tomar la noche anterior. Aparece un día más en el año (110 vs 109).
+
+**Indicador de zona en la UI**: badge `ART (UTC−3)` en la navbar, con tooltip que explica que los cortes de día también son locales. Va en la navbar y no en una vista porque aplica a las tres. Nuevo `src/utils/timezone.js` como semilla de la i18n ya anotada más abajo; los call sites existentes siguen hardcodeados a propósito, se migran en esa pasada.
+
+**Queda deliberadamente sin cambiar**: los buckets **horarios** de `GetRecentHistory` y `GetDayHistory` siguen rotulados por su cierre. Cambiarlo correría los gráficos una hora y esa convención ya estaba establecida.
+
+### Nota histórica: cómo se veía el bug antes de arreglarlo
 
 **No tiene relación con el tag `firmware` y no lo introdujo este arreglo** — es anterior y sigue ahí. `aggregateWindow` rotula cada ventana con su borde de **cierre** (`timeSrc: "_stop"` es el default), así que la ventana del día N queda estampada a medianoche del día N+1. Medido:
 
