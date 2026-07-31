@@ -18,7 +18,7 @@ Resultado: una serie cuyo eje de tiempo avanza, salta para atrás y vuelve a ava
 
 **Verificado contra el InfluxDB de producción**, con el backend corriendo local (`MQTT_CLIENT_ID=weather-station-backend-dev`) y el front por `VITE_API_PROXY`: 72 h pasan de **464 puntos con 9 saltos hacia atrás** a **155 estrictamente crecientes y sin timestamps repetidos**. Los tres rangos de la UI (24h/72h/7d) quedan monótonos, y el gráfico se ve como una sola curva continua. `go build`, `go vet` y `go test` limpios.
 
-> ⚠️ **Pendiente: rebuild y push de la imagen del backend.** El arreglo es 100% backend; hasta que no se republique `maulpdocker/weather-station:backend` y se haga `docker compose pull && up -d` en la Pi, en campo se sigue viendo duplicado. **Se acumula con el redeploy que ya estaba pendiente del contador de tiempo de captura** (ver la sección de 2026-07-29) — un solo rebuild cubre los dos.
+> ✅ **Desplegado y verificado en campo el 2026-07-31.** Ver [el cierre del bloque](#-desplegado-todo-verificado-contra-la-pi-2026-07-31) al final de esta sección.
 
 ### ✅ El mismo bug estaba en las otras cuatro queries — también corregido (2026-07-31)
 
@@ -66,6 +66,25 @@ Verificado **en la UI renderizada** además de en la API: los 30,98 °C pasan de
 
 **Queda deliberadamente sin cambiar**: los buckets **horarios** de `GetRecentHistory` y `GetDayHistory` siguen rotulados por su cierre. Cambiarlo correría los gráficos una hora y esa convención ya estaba establecida.
 
+### ✅ Desplegado, todo verificado contra la Pi (2026-07-31)
+
+Mau rebuildeó y pusheó **las dos imágenes** (`backend` y `frontend` — el badge de zona horaria vive en el frontend) y corrió `docker compose pull && up -d`. **Tema cerrado.**
+
+Medido contra `http://192.168.18.250` después del deploy, no reportado de oídas:
+
+| qué | antes | después del deploy |
+|---|---|---|
+| `/weather/current` | congelado 20 h en el pasado | **4 s de antigüedad** |
+| calendario 27/7 | 12,66 / 11,85 | **30,98 / 6,66** (corrimiento corregido) |
+| `date` del calendario | `...T00:00:00Z` | **`2026-07-27T00:00:00-03:00`** |
+| celda de hoy vs extremos del día | usaban días distintos | **coinciden exacto** (29,42 / 15,20) |
+| mínimo del día | tomaba la noche anterior | **`03:00:35Z` = 00:00 local** |
+| `battery-trend` 72 h | 464 puntos, 9 saltos atrás | **155 puntos, 0 saltos** |
+
+El `time` de los extremos sigue viajando en **UTC** (`17:34:30Z` para un máximo de las 14:34 local), que es el contrato correcto: el browser localiza. Confirmado que no hay doble conversión.
+
+Este deploy se llevó **cuatro bloques de trabajo acumulados**: el contador de tiempo de captura (2026-07-29), la tendencia de batería, las cinco queries partidas por el tag `firmware`, y los cortes de día en hora local + el badge.
+
 ### Nota histórica: cómo se veía el bug antes de arreglarlo
 
 **No tiene relación con el tag `firmware` y no lo introdujo este arreglo** — es anterior y sigue ahí. `aggregateWindow` rotula cada ventana con su borde de **cierre** (`timeSrc: "_stop"` es el default), así que la ventana del día N queda estampada a medianoche del día N+1. Medido:
@@ -82,7 +101,7 @@ Hay una segunda dimensión encima: las ventanas son **días UTC**, pero la estac
 
 Lista de minor bugs/mejoras que trajo Mau sobre la vista de service mode. Las cuatro están implementadas y **verificadas en el browser** contra un backend mockeado servido por IP de LAN (ver más abajo por qué eso importa). `npm run lint` y `npm run build` limpios; `go build`, `go vet` y `go test` limpios.
 
-> ⚠️ **Pendiente: rebuild y push de la imagen del backend.** El contador de tiempo de captura necesita dos campos nuevos en el snapshot de estado. El frontend degrada solo si no están (no muestra el contador, no se rompe), así que se pueden desplegar en cualquier orden — pero hasta que no vaya el backend, el punto 4 no se ve.
+> ✅ **Desplegado el 2026-07-31**, junto con los arreglos de las queries de Influx. El contador de tiempo de captura necesitaba dos campos nuevos en el snapshot de estado; ya están en campo.
 
 **1. Los botones de copiar no funcionaban en campo — `navigator.clipboard` no existe sin HTTPS.** Afectaba al copiado de payloads y al del comando de PlatformIO. La API sólo está definida en *secure contexts* (HTTPS o localhost), y el dashboard se sirve por nginx en HTTP plano sobre la LAN, así que `navigator.clipboard.writeText(...)` tiraba un `TypeError` antes de intentar nada. El `catch` pelado se lo comía: de ahí que no apareciera nada en consola.
 
