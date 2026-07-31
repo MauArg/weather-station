@@ -72,7 +72,48 @@ Corregido con antigüedad relativa (`formatAge()`, que devuelve null por debajo 
 
 De paso se revisó el camino de limpieza del SSE por si había un leak de suscriptores, que era la otra lectura posible del síntoma: `HandleStream` cierra con `defer Unsubscribe` y sale por `r.Context().Done()`, y `broadcast()` es no bloqueante. **No había nada que arreglar ahí.**
 
-## 🎯 CAUSA RAÍZ: el enlace es asimétrico y el uplink del nodo está al límite (2026-07-30)
+## ✅ RESUELTO: forzar 802.11b lleva la pérdida de 39% a 0% (2026-07-30)
+
+**`1.12.0` con `esp_wifi_set_protocol(WIFI_IF_STA, WIFI_PROTOCOL_11B)` — 40 ciclos consecutivos, cero perdidos.**
+
+A/B limpio, el mismo día y con una hora de diferencia, con el único cambio de firmware siendo ese:
+
+| | ventana | perdidos |
+|---|---|---|
+| `1.11.0` (tasas OFDM, el default) | 16:27-17:29 | **22/57 = 39%** |
+| `1.12.0` (forzado a 11b) | 18:34-19:16 | **0/40 = 0%** |
+
+`z = 4,47`, `p = 7,9 × 10⁻⁶`. Y contra el mejor régimen que se había visto nunca (12%), la probabilidad de 40 ciclos limpios seguidos por azar es 0,6%. No es la no-estacionariedad ambiental: eso movía la tasa entre 12% y 41%, nunca a cero.
+
+**Por qué funciona.** A 1-11 Mbps (DSSS) la sensibilidad requerida es 5-10 dB menor que en OFDM. El enlace del nodo estaba justo en el margen —lo dice todo lo medido antes: 16% de reintentos hasta en los ciclos sanos, rachas de 10+ reintentos agotando el límite— y bajar la tasa compra exactamente los dB que faltaban. El costo es tiempo de aire: una trama de 660 B tarda 0,5 ms a 11 Mbps contra 0,1 ms a 54, irrelevante en un nodo que transmite un puñado de tramas por minuto.
+
+### ⚠️ Se llegó por un razonamiento equivocado, y conviene que quede escrito
+
+La hipótesis que llevó a probar 11b fue: *"el sniffer captura las tramas de gestión del nodo (1 Mbps) y ninguna de datos (OFDM), a la misma distancia y en el mismo instante — luego las de tasa alta están al límite"*. **Esa observación era un artefacto.**
+
+Entre las dos capturas que se compararon, el ESP32 sniffer había cambiado de posición: está sobre un escritorio regulable que se movió de 78 cm a 101 cm. **A 2,4 GHz eso son casi dos longitudes de onda** (λ ≈ 12,5 cm), suficiente para pasar de un máximo a un nulo de multitrayecto.
+
+Verificado en vivo con un experimento controlado (marca a las 18:51:39, escritorio subido a las 18:52):
+
+| escritorio | tramas del nodo | RSSI del nodo | RSSI del AP |
+|---|---|---|---|
+| abajo | **0** | inaudible | **-14 dBm** |
+| arriba | **47** | -74 dBm | **-20 dBm** |
+
+El control es que **el AP quedó 6 dB peor** mientras el nodo pasaba de inaudible a audible: no fue una mejora general del receptor, fue multitrayecto específico de ese trayecto. Y confirmado por partida doble: la captura de las 11:13 —sin 11b y con el escritorio arriba— **sí tenía** tramas de datos del nodo (`data: 40`, `qos-data: 27`).
+
+**La lección de método**: el sniffer es un instrumento y su posición es parte de la calibración. Para comparar capturas entre sí hay que dejarlo fijo y anotado. Es el mismo error que ya habíamos identificado con el horario, cometido en otra dimensión.
+
+La intervención resultó correcta igual, porque el mecanismo físico que la justifica —tasas bajas necesitan menos margen— era cierto por su cuenta y estaba sostenido por el resto de la evidencia.
+
+### Pendientes que deja
+
+- **Confirmar en una ventana larga** (varias horas, distintos momentos del día) que el 0% se sostiene. 40 ciclos son concluyentes contra el 39%, pero no dicen nada sobre el comportamiento nocturno o con lluvia.
+- **Evaluar `WIFI_PROTOCOL_11B|WIFI_PROTOCOL_11G` como término medio** si alguna vez molesta el tiempo de aire. Hoy no molesta.
+- **La confirmación de entrega en banda queda sin urgencia**, pero sigue siendo la única defensa real contra una pérdida silenciosa. Vale como red de seguridad si el enlace vuelve a degradarse.
+- **El margen sigue siendo escaso**: que 23 cm cambien tanto lo demuestra. La altura y orientación del nodo dentro de la caja estanca es una palanca gratis que nunca se tocó.
+
+## 🎯 Causa raíz (análisis previo, superado por lo de arriba): el enlace al límite (2026-07-30)
 
 **Encontrada con el sniffer 802.11.** No es el AP echando al nodo, no es steering, no es el driver colgado. **El nodo transmite y el AP no lo escucha.**
 
