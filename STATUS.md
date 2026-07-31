@@ -513,7 +513,7 @@ Costo: ~40 ms de espera en el caso bueno (RTT de LAN) y ~480 B de RX por ciclo, 
 
 **Corregido ya**: `LOG_PUBLISH_FAIL` decía "¿buffer corto?" con 505 B contra 741 disponibles — era una conexión caída. Ahora el firmware distingue las dos causas.
 
-**Diferido a la sesión dedicada de MQTT**: reintento de `mqtt.connect()` en el ciclo normal. Hoy hay un único intento; si da timeout, `main.cpp` va directo a `goToDeepSleep()`. Con WiFi ya arriba —la parte cara, y que nunca falla— un segundo intento cuesta a lo sumo otro socket timeout. Y **revisar el presupuesto de reintentos de WiFi**: `WIFI_MAX_RETRIES` 3 × `WIFI_TIMEOUT_MS` 15 s da un peor caso de 45 s que nunca ocurrió — los ciclos fallidos costaron 5,2–6,2 s y todos fallaron en MQTT. Antes de recortarlo conviene capturar una ventana con señal peor, para no optimizar contra una muestra de una sola noche.
+**Diferido a la sesión dedicada de MQTT**: reintento de `mqtt.connect()` en el ciclo normal. Hoy hay un único intento; si da timeout, `main.cpp` va directo a `goToDeepSleep()`. Con WiFi ya arriba —la parte cara, y que nunca falla— un segundo intento cuesta a lo sumo otro socket timeout. ~~Y **revisar el presupuesto de reintentos de WiFi**~~ — **resuelto el 2026-07-31 en `1.13.1`.** Decía que el peor caso de `WIFI_MAX_RETRIES` 3 × `WIFI_TIMEOUT_MS` 15 s = 45 s nunca había ocurrido, y pedía capturar una ventana con peor señal antes de recortar. Esa captura llegó (nivel 1, ~830 ciclos) y **el peor caso ocurrió dos veces** — boots 668 y 1074, con `WIFI_GIVEUP` a los 45,9 s despierto. `WIFI_TIMEOUT_MS` bajó a 5 s; los detalles y por qué no menos están en `src/config.h`.
 
 **Ya hecho**: mover el rail-on del DHT22 al inicio de `setup()` — entró en el `1.5.0`, ver la sección de power management.
 
