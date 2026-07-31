@@ -20,11 +20,37 @@ Resultado: una serie cuyo eje de tiempo avanza, salta para atrás y vuelve a ava
 
 > ⚠️ **Pendiente: rebuild y push de la imagen del backend.** El arreglo es 100% backend; hasta que no se republique `maulpdocker/weather-station:backend` y se haga `docker compose pull && up -d` en la Pi, en campo se sigue viendo duplicado. **Se acumula con el redeploy que ya estaba pendiente del contador de tiempo de captura** (ver la sección de 2026-07-29) — un solo rebuild cubre los dos.
 
-### El mismo bug está latente en las queries del dashboard (no tocado)
+### ✅ El mismo bug estaba en las otras cuatro queries — también corregido (2026-07-31)
 
-Fuera del alcance de la sesión (se acordó service mode solamente), pero **confirmado midiendo, no supuesto**: `GetRecentHistory` con el mismo rango devuelve también **10 tablas**. `internal/database/influx_history.go` tiene el patrón idéntico —`from()` sin `group()`— en `GetRecentHistory`, `GetDailyRaw` y las stats históricas. Ahí el `pivot(rowKey:["_time"])` tampoco fusiona: su group key de salida es la de entrada menos las columnas pivoteadas, así que `firmware` sobrevive y sigue habiendo una tabla por versión.
+Mau pidió cerrarlo completo, así que se barrieron **todas** las queries Flux del backend. Las cinco que leen telemetría estaban afectadas (la sexta, el healthcheck, no mira datos). Commit `e4f5a74`.
 
-Se nota menos porque esas vistas agregan más y no dibujan una línea temporal tan larga, pero el defecto es el mismo y va a empeorar con cada reflash. **Es un arreglo mecánico** (agregar `group()`/`sort()` donde corresponda, cuidando que el `pivot` siga necesitando su rowKey). Vale hacerlo en una pasada dedicada al dashboard.
+**El caso más grave, y que nadie había reportado: `/weather/current` servía datos viejos.** `GetCurrentTelemetry` hace `last()`, que con el tag `firmware` contesta **una vez por versión**; el lector Go toma el primer record y Flux emite las group keys en orden lexicográfico. Medido en producción: el dashboard mostraba `2026-07-30T19:12:44Z` con **14,65 °C y balance 46 mW** mientras el nodo publicaba `1.12.0` — **20 h de atraso**, datos de la noche anterior en pleno día de sol (26,2 °C, +2466 mW, SoC 99,6%). Y no se destrababa solo: quedaba clavado hasta que esa versión saliera de la ventana de 24 h, y ahí pasaba a la siguiente **por orden alfabético, no por fecha**.
+
+**El calendario anual mostraba extremos falsos.** `GetYearlyTemperature` corría `aggregateWindow(1d)` por versión, así que un día con reflasheo volvía como varias filas con la misma fecha, cada una con los extremos de *su* pedazo del día. `GetYearlyTable` indexa un map por día, o sea que **ganaba la última escrita** — la versión que ordenara última por nombre. Medido: **127 filas para 109 días**, y el 2026-07-29 informaba 14,86/14,77 °C cuando el día real fue **22,99/5,31**.
+
+| día | antes (roto) | ahora |
+|---|---|---|
+| 2026-07-29 | 14,86 / 14,77 | **22,99 / 5,31** |
+| 2026-07-30 | 11,94 / 11,91 | **15,65 / 11,91** |
+| 2026-07-31 | 10,86 / 9,30 | **15,65 / 9,30** |
+
+**`GetDailyRaw` es el único que no corrompía nada**, y conviene que quede escrito para no volver a investigarlo: `GetDailyStats` sólo saca max/min sobre todo el slice, que es independiente del orden, así que leía bien los extremos de una serie desordenada. Se corrigió igual para que no sea una trampa para el próximo que asuma orden temporal. Verificado: la respuesta es byte a byte idéntica antes y después.
+
+**El detalle que no es obvio y cuesta media hora si se re-deriva: no se puede hacer `group()` a secas en las queries multi-campo.** Una columna de Flux tiene un solo tipo y estos campos son mixtos — `solar_mW` y `system_mW` son `long`, el resto `double` —, así que colapsar todo en una tabla deja `_value` ambiguo y la query **falla** con `schema collision detected: column "_value" is both of type float and int`. Hay que agrupar **por `_field`** (`group(columns: ["_field"])`), que fusiona las versiones y deja una tabla por campo, con su `_value` homogéneo. `influx_battery.go` y `GetYearlyTemperature` sí pueden usar `group()` pelado porque leen un solo campo.
+
+Verificado endpoint por endpoint contra el InfluxDB de producción: `/weather/history/recent` (6h/24h/72h) y `/weather/history/day` quedan monótonos, el calendario baja a 109 filas para 109 días sin duplicados, y `/weather/current` devuelve una lectura de hace segundos. `go build`, `go vet` y `go test` limpios.
+
+### ⚠️ Bug distinto que salió a la luz: el calendario está corrido un día
+
+**No tiene relación con el tag `firmware` y no lo introdujo este arreglo** — es anterior y sigue ahí. `aggregateWindow` rotula cada ventana con su borde de **cierre** (`timeSrc: "_stop"` es el default), así que la ventana del día N queda estampada a medianoche del día N+1. Medido:
+
+| celda del calendario | contiene en realidad | max |
+|---|---|---|
+| 28/7 | datos del **27/7** | 30,98 |
+| 29/7 | datos del **28/7** | 22,99 |
+| 30/7 | datos del **29/7** | 15,65 |
+
+Hay una segunda dimensión encima: las ventanas son **días UTC**, pero la estación está en Argentina (UTC−3) y el front formatea en `America/Argentina/Buenos_Aires`. Aun corrigiendo el rótulo, un "día" seguiría yendo de 21:00 a 21:00 hora local. **Queda pendiente de decisión de Mau**, porque arreglarlo mueve todas las fechas del calendario y además hay que elegir si el día es UTC o local.
 
 ## Vista de service mode — cuatro correcciones, y una necesita redeploy del backend (2026-07-29)
 
