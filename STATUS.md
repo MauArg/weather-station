@@ -2,7 +2,29 @@
 
 > Actualizar este archivo al final de cada sesión de trabajo relevante. Es el punto de partida para la siguiente conversación — ver política en [`CLAUDE.md`](./CLAUDE.md).
 
-_Última actualización: 2026-07-29_
+_Última actualización: 2026-07-31_
+
+## ✅ Tendencia de batería: el gráfico se duplicaba con cada reflash (2026-07-31)
+
+Mau reportó "dos lecturas solapadas" en el gráfico de tendencia de energía de service mode, sospechando que aparecían al deployar firmware nuevo. **La sospecha era correcta, y la causa es exactamente esa.**
+
+Los puntos de `telemetry` llevan un tag **`firmware`** (los tags del measurement son `firmware` y `station_id`). Entonces `from()` devuelve **una tabla por versión que el nodo corrió dentro del rango** — diez en las últimas 72 h, de `1.2.0` a `1.12.0`. `aggregateWindow` y `keep` trabajan por tabla, y `keep(columns:["_time","_value"])` saca la *columna* del tag pero **no fusiona las tablas**: la group key sigue ahí. El `for result.Next()` de Go aplanaba esas diez tablas en un solo slice, concatenadas en el orden en que Flux emite las group keys, que es **lexicográfico por valor del tag** — o sea `1.10.0, 1.11.0, 1.12.0, 1.2.0, 1.3.0, …`.
+
+Resultado: una serie cuyo eje de tiempo avanza, salta para atrás y vuelve a avanzar. Con `XAxis type="number"` cada segmento se dibuja sobre todo el ancho, y eso es lo que se veía como dos trazos superpuestos más una recta larga cruzando el gráfico (la línea que une el salto).
+
+**Arreglo** (`internal/database/influx_battery.go`): `|> group() |> sort(columns: ["_time"])` antes de `aggregateWindow`. Además de arreglar el orden es la aritmética correcta — es una sola batería física, y una ventana que cruza un reflash debe promediar todas sus muestras y no emitir un punto por versión. El `sort()` no es decorativo: `group()` concatena las tablas tal cual y `aggregateWindow` espera la entrada ordenada por tiempo.
+
+**Segundo efecto que arrastraba, en `HandleGetBatteryTrend`.** El cutoff para pegar el ring en memoria al final de la serie sale de `points[len(points)-1].Time`. Con las tablas desordenadas ese último elemento era la cola de la versión que ordenaba última **por nombre**, no la muestra más nueva: quedaba horas en el pasado y `BatteryLiveAfter` volvía a apilar puntos vivos encima de historia que la serie ya traía. Se corrige solo al ordenar la serie; quedó anotado el acoplamiento en el comentario, porque no es evidente que esa línea dependa del orden del query.
+
+**Verificado contra el InfluxDB de producción**, con el backend corriendo local (`MQTT_CLIENT_ID=weather-station-backend-dev`) y el front por `VITE_API_PROXY`: 72 h pasan de **464 puntos con 9 saltos hacia atrás** a **155 estrictamente crecientes y sin timestamps repetidos**. Los tres rangos de la UI (24h/72h/7d) quedan monótonos, y el gráfico se ve como una sola curva continua. `go build`, `go vet` y `go test` limpios.
+
+> ⚠️ **Pendiente: rebuild y push de la imagen del backend.** El arreglo es 100% backend; hasta que no se republique `maulpdocker/weather-station:backend` y se haga `docker compose pull && up -d` en la Pi, en campo se sigue viendo duplicado. **Se acumula con el redeploy que ya estaba pendiente del contador de tiempo de captura** (ver la sección de 2026-07-29) — un solo rebuild cubre los dos.
+
+### El mismo bug está latente en las queries del dashboard (no tocado)
+
+Fuera del alcance de la sesión (se acordó service mode solamente), pero **confirmado midiendo, no supuesto**: `GetRecentHistory` con el mismo rango devuelve también **10 tablas**. `internal/database/influx_history.go` tiene el patrón idéntico —`from()` sin `group()`— en `GetRecentHistory`, `GetDailyRaw` y las stats históricas. Ahí el `pivot(rowKey:["_time"])` tampoco fusiona: su group key de salida es la de entrada menos las columnas pivoteadas, así que `firmware` sobrevive y sigue habiendo una tabla por versión.
+
+Se nota menos porque esas vistas agregan más y no dibujan una línea temporal tan larga, pero el defecto es el mismo y va a empeorar con cada reflash. **Es un arreglo mecánico** (agregar `group()`/`sort()` donde corresponda, cuidando que el `pivot` siga necesitando su rowKey). Vale hacerlo en una pasada dedicada al dashboard.
 
 ## Vista de service mode — cuatro correcciones, y una necesita redeploy del backend (2026-07-29)
 
