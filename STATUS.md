@@ -29,17 +29,24 @@ Verificado `npm run lint` y `npm run build` limpios después de cada tanda. Barr
 
 `datos_backend.md`, `backend_api_specs.md` y `README.md` quedaron en español (documentación, fuera de alcance).
 
-### ⏳ Backend — pendiente, arranca acá la próxima sesión
+### ✅ Backend — terminado (2026-08-02)
 
-Relevado pero **sin tocar todavía**: 29 archivos `.go`, 12 con contenido en español (detectados por grep de tildes/ñ). La mayoría entre 20-300 líneas; `internal/mqttbridge/bridge.go` es el más grande con 808 y `internal/mqttbridge/logs.go` le sigue con 453 — van a necesitar leerse y trabajarse aparte, como LogPanel.jsx en el frontend.
+Los 12 archivos `.go` con contenido en español, más `.env.example` y `.gitignore`. 7 commits, todos pusheados:
+`d70a06d` battery+config+luminosity · `15544e6` logdict+logdecode (incluye tests) · `96479b0` models/logs.go+service.go (+ arregla un resto sin tilde en battery.go) · `f4f70c7` api/routes+api/handlers/logs.go · `4ba5fb9` mqttbridge/bridge.go+logs.go (808+453 líneas, el paquete más grande) · `bce4be7` .env.example · `c9d85b7` .gitignore.
 
-Del muestreo que sí se hizo (`internal/battery/battery.go`, `internal/models/*.go`): identificadores y JSON tags en inglés, comentarios ya mayormente en inglés, pero varios strings de negocio en español (`TierLabel`, `RiskNote` en `battery.go`) que se devuelven al frontend — ver el hallazgo de arriba.
+**Encontrado durante esta pasada, no antes:** el grep de tildes/ñ del arranque de sesión no alcanza — se coló "tabla de componentes" en un comentario de `battery.go` (sin tilde) que sólo apareció al pasar un segundo grep con palabras sueltas comunes sin acentuar (de/la/el/con/nodo/campo/etc.). Se corrigió y desde ahí se usó ese grep más amplio en cada archivo, no sólo el de acentos. **Si se retoma texto ya "terminado" de este proyecto, conviene repasarlo con ese grep amplio antes de darlo por bueno.**
 
-**Al retomar:** agrupar en commits por paquete (`internal/battery`, `internal/energy`, `internal/luminosity`, `internal/mqttbridge`, `internal/logdecode`+`internal/logdict`, `internal/database`, `internal/api/handlers`+`routes`, `internal/models`, `cmd/server`+`internal/config`+`internal/version`), traducir, y cerrar con `go build && go vet && go test ./...` antes de pushear. Nota de entorno: en esta máquina el tool de Bash no tiene `git`/`go`/`npm` en el PATH — usar PowerShell para todo eso.
+**Confirmado el hallazgo de la sección de arriba:** `CommandResponse.Note` (bridge.go), `LogState.CantWhy` (logs.go) y las labels de `sensorCatalog` (bridge.go) son texto que el backend arma y el frontend muestra tal cual — ya traducidos, pero son la lista concreta de dónde va a tener que tocar la sesión de i18n además de `battery.go`.
 
-### ⏳ IoT firmware — pendiente
+Verificado `go build ./...`, `go vet ./...` y `go test ./...` limpios después de cada tanda (incluye actualizar un test de `logdecode` que buscaba el substring en español `"reinicio del nodo"` dentro de una nota ya traducida — pasa a buscar `"node restart"`).
+
+`CLAUDE.md` quedó en español (documentación, fuera de alcance).
+
+### ⏳ IoT firmware — pendiente, arranca acá la próxima sesión
 
 Relevado sólo por encima: `src/` tiene 13 archivos (10 con contenido en español, comentarios densos + probablemente `Serial.print` de debug), más `infra/` (docker-compose, mosquitto.conf) y `tools/` (excluir `.pio` de `tools/wifi-sniffer/`, que es build/vendor de terceros). Sin arrancar todavía.
+
+**Al retomar:** relevar `src/` con el grep amplio (tildes/ñ **y** palabras sueltas sin acentuar — ver la nota del backend arriba), agrupar en commits razonables, y verificar que compile con PlatformIO antes de pushear (`pio run` por cada environment relevante — chequear cuáles hay en `platformio.ini`). Nota de entorno: en esta máquina el tool de Bash no tiene `git`/`go`/`npm`/`pio` en el PATH — usar PowerShell para todo eso.
 
 ## ✅ Versión 1.2.0 — desplegada y verificada (2026-08-02)
 
