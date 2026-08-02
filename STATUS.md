@@ -4,7 +4,7 @@
 
 _Última actualización: 2026-08-02_
 
-## 🔄 Limpieza Spanglish → inglés (en curso, arranca 2026-08-02)
+## ✅ Limpieza Spanglish → inglés — terminada, los 3 repos (2026-08-02)
 
 Sesión dedicada exclusivamente a dejar el código de los 3 repos 100% en inglés (identificadores, comentarios, strings, texto de UI), como base para una futura sesión que implemente un sistema de i18n (selector EN/ES en la UI, hoy hardcodeado). Es el mismo pendiente ya anotado en "Pendientes de UI, revisados y anotados para atacar más adelante" (2026-07-29), más abajo en este archivo.
 
@@ -42,11 +42,18 @@ Verificado `go build ./...`, `go vet ./...` y `go test ./...` limpios después d
 
 `CLAUDE.md` quedó en español (documentación, fuera de alcance).
 
-### ⏳ IoT firmware — pendiente, arranca acá la próxima sesión
+### ✅ IoT firmware — terminado (2026-08-02)
 
-Relevado sólo por encima: `src/` tiene 13 archivos (10 con contenido en español, comentarios densos + probablemente `Serial.print` de debug), más `infra/` (docker-compose, mosquitto.conf) y `tools/` (excluir `.pio` de `tools/wifi-sniffer/`, que es build/vendor de terceros). Sin arrancar todavía.
+`src/` (command, logging, sensors, service_mode, config/board_config, main.cpp), `platformio.ini`, `infra/` (docker-compose.yml, mosquitto.conf, env.example), `secrets.ini.example`, `.gitignore`, y las dos herramientas de diagnóstico en `tools/` (`brokerprobe/` en Go+Python+PowerShell, `wifi-sniffer/` en C++/PlatformIO+Python). 9 commits, todos pusheados:
+`30d23a3` command · `2bb4bec` logging.h/.cpp (incluye el diccionario `LOG_CODES` que renderiza texto de producción, no sólo comentarios) · `dd22689` sensors · `7dc6046` service_mode · `0c72566`+`d78ac7b` config.h+board_config.h (+ arregla un resto "I2C para BMP180" que el primer grep no vio) · `654687d` main.cpp · `c1cdd87` platformio.ini + infra/ + secrets.ini.example · `8997104` tools/brokerprobe (6 archivos) · `4657688` tools/wifi-sniffer (3 archivos) · `500225b` .gitignore.
 
-**Al retomar:** relevar `src/` con el grep amplio (tildes/ñ **y** palabras sueltas sin acentuar — ver la nota del backend arriba), agrupar en commits razonables, y verificar que compile con PlatformIO antes de pushear (`pio run` por cada environment relevante — chequear cuáles hay en `platformio.ini`). Nota de entorno: en esta máquina el tool de Bash no tiene `git`/`go`/`npm`/`pio` en el PATH — usar PowerShell para todo eso.
+**Repetido el hallazgo del backend, una vez más:** un grep con glob (`{archivo1,archivo2,...}`) devolvió falsos negativos — dijo que `platformio.ini` no tenía español cuando sí tenía. Se abandonó el filtrado por glob para el chequeo de completitud; el método que funciona es correr el grep (acentos **y** palabras sueltas) sin ningún filtro sobre la raíz del repo entero, y recién ahí triar archivo por archivo en docs/hardware/código. **Vale como regla general para las próximas veces que se retome esta limpieza en otro repo:** no confiar en un grep scoped por glob para declarar un repo "terminado".
+
+Verificado con `pio run` (environments `production`, `development` del firmware principal, y el default `s3_uart` de `tools/wifi-sniffer`) — los tres compilan limpio. También `go build ./...` y `go vet ./...` sobre `tools/brokerprobe`, limpio.
+
+**Nota de seguridad, sin resolver, no es parte de esta limpieza:** `tools/brokerprobe/main.go` tiene un default hardcodeado para el flag `--pass` (`aXdC7nE2gLEe`) que parece una contraseña MQTT real, commiteada en un repo de GitHub. No se tocó porque no es texto en español y cambiarlo no estaba pedido — queda anotado acá para que Mau decida si hay que rotarla y sacarla del default.
+
+`aprendizajes_y_roadmap.md`, `componentes_y_conexiones.md`, `Readme.md`, `PCB/README.md`, `tools/brokerprobe/README.md`, `logging_system_design.md` y `CLAUDE.md` quedaron en español (documentación, fuera de alcance). Los archivos de hardware (`.fzz`, exports de `PCB/`, los `.svg`/`.html` de esquemático) no se tocaron.
 
 ## ✅ Versión 1.2.0 — desplegada y verificada (2026-08-02)
 
