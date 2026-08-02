@@ -4,9 +4,11 @@
 
 _Última actualización: 2026-08-02_
 
-## 🚀 Versión 1.2.0 — lista para desplegar, NO desplegada todavía (2026-08-02)
+## ✅ Versión 1.2.0 — desplegada y verificada (2026-08-02)
 
-> ⚠️ **Pendiente: rebuild y push de las DOS imágenes** (`maulpdocker/weather-station:backend` y `:frontend`) y `docker compose pull && up -d` en la Pi. Todo lo de abajo está commiteado y pusheado pero **no está en campo**.
+> Desplegada por Mau (las dos imágenes) y verificada contra la Pi: `GET /api/v1/version` responde `1.2.0`, `/weather/current` trae `pressureQnh`, `batteryVolts`, `luminosity` y `energyState`.
+>
+> **Nota para no confundirse tras cualquier redeploy**: el `energyState` arranca en `unknown` ("Midiendo…") con la deriva vacía, porque el ring de batería del bridge vive en memoria y se vacía al reiniciar el backend. Se resuelve solo alrededor de una hora después. No es una falla.
 
 Backend y frontend en **1.2.0**. Cuatro bloques de trabajo, en orden cronológico.
 
@@ -70,7 +72,11 @@ Validado sobre **5509 muestras**: 19-07h descargando, 09-15h y 16-17h cargando/l
 ### Lo que salió de acá y no es de esta tanda
 
 - **El consumo de reposo pesa más que la ventana activa** — ver `weather-station-station-iot/componentes_y_conexiones.md`. Estimado desde la caída nocturna de la batería: **5,10 mA** totales, de los cuales la ventana activa explica 1,86 mA. Quedan **~3,2 mA (63%)** sin explicar. En mAh/día: activo 44,7 · resto 77,7 · **total 122,4**. Los LEDs están todos descartados (Mau confirmó DS18B20 y ESP32 desoldados); el sospechoso es el **reposo del step-up boost**. **Pendiente: medirlo con multímetro** — no hay firmware que lo resuelva, el INA219 se apaga al dormir.
-- **Promediar el consumo en el firmware** — acordado que es conceptualmente correcto: es *adquisición*, no derivación, porque la dinámica sub-segundo del burst de WiFi **no existe en la telemetría** y ningún backend puede recuperarla. No es análogo al punto de rocío, que sí es función pura de datos publicados. Recomendación: publicar la **integral y la ventana por separado** (`active_mAs` + `awake_ms`), no el promedio masticado, para que el backend pueda recalcular sin reflashear — y de paso el ciclo de trabajo dejaría de ser una constante hardcodeada. El INA219 tiene promediado por hardware (128 muestras, 68,10 ms); leyendo a esa cadencia se cubre casi el 100% de la ventana. Ojo: la librería Adafruit no lo expone, hay que escribir el registro `0x00` después de `setCalibration_*()`.
+- **Promediar el consumo en el firmware** — acordado que es conceptualmente correcto: es *adquisición*, no derivación, porque la dinámica sub-segundo del burst de WiFi **no existe en la telemetría** y ningún backend puede recuperarla. No es análogo al punto de rocío, que sí es función pura de datos publicados.
+
+  📄 **El diseño completo vive en [`weather-station-station-iot/aprendizajes_y_roadmap.md`](./weather-station-station-iot/aprendizajes_y_roadmap.md) → "Medir la energía de la ventana activa"** — ahí está el detalle de implementación (qué campos publicar y por qué la integral y no el promedio, la codificación de bits del ADC del INA219, los tres obstáculos conocidos con la librería Adafruit y con el WiFi ocupando la ventana). Se documentó ahí y no acá porque el trabajo de firmware pasa por ese repo, y su `CLAUDE.md` manda el roadmap a ese archivo.
+
+  **Orden acordado**: medir primero el reposo con multímetro. Esto instrumenta 44,7 mAh/día; el reposo son 77,7 mAh/día sin explicar.
 
 ## ✅ Tendencia de batería: el gráfico se duplicaba con cada reflash (2026-07-31)
 
