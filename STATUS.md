@@ -2,7 +2,75 @@
 
 > Actualizar este archivo al final de cada sesión de trabajo relevante. Es el punto de partida para la siguiente conversación — ver política en [`CLAUDE.md`](./CLAUDE.md).
 
-_Última actualización: 2026-07-31_
+_Última actualización: 2026-08-02_
+
+## 🚀 Versión 1.2.0 — lista para desplegar, NO desplegada todavía (2026-08-02)
+
+> ⚠️ **Pendiente: rebuild y push de las DOS imágenes** (`maulpdocker/weather-station:backend` y `:frontend`) y `docker compose pull && up -d` en la Pi. Todo lo de abajo está commiteado y pusheado pero **no está en campo**.
+
+Backend y frontend en **1.2.0**. Cuatro bloques de trabajo, en orden cronológico.
+
+### 1. Sistema de versionado (no existía)
+
+Ni constante, ni tags de git (cero en los tres repos), ni tags de versión en las imágenes. El `package.json` del front tenía `"version": "0.0.0"` del scaffold. Sólo el firmware estaba versionado.
+
+- **Backend**: `internal/version/version.go`, una `var` (no `const`, para que un pipeline pueda estamparla con `-ldflags`). Se expone en `GET /api/v1/version`, que **no toca InfluxDB ni el broker** a propósito: sigue contestando cuando todo lo demás está caído, que es cuando alguien mira.
+- **Frontend**: el campo `version` de `package.json`, leído en build por `vite.config.js` e inyectado como `__APP_VERSION__`.
+- **UI**: leyenda `ui 1.2.0 · api 1.2.0` en la esquina inferior derecha. El backend degrada a `—` si no contesta — un hueco ocupado hace que "no contestó" se lea distinto de "misma versión".
+
+> ⚠️ **Las imágenes usan tag mutable**, así que nada obliga a que el número suba cuando cambia la imagen. **Bumpear es el último paso antes de rebuildear.** Ya se pasó por alto una vez y lo tuvo que preguntar Mau. Anotado en el `CLAUDE.md` de los dos repos.
+
+### 2. Presión: QNH por defecto
+
+El nodo publica `pressure_qnh` desde siempre (`readSealevelPressure(ALTITUDE_M)`, 780 m) pero **ninguna query lo seleccionaba** — había sólo un comentario en `influx.go`. La card mostraba los ~923 hPa de presión de estación, que sólo se interpretan sabiendo la altura del sensor, en vez de los ~1013 que es como se cita una lectura barométrica.
+
+Va como `*float64` con `omitempty`: el firmware **omite** el campo cuando la lectura falla (`main.cpp:414`), y colapsar eso en 0 mostraría una presión a nivel del mar de cero. Sin el campo, la card queda como antes, sin switch.
+
+Toggle discreto (chevron + leyenda, ambos clickeables) que persiste en `localStorage`. Separador de miles apagado: `1.012,53` se confunde con el decimal de un vistazo.
+
+### 3. El gráfico de lag térmico ahora grafica luz, no potencia del panel
+
+Leía la irradiancia del INA219 del panel, que mide **la corriente que el cargador pide**, no la luz que llega. Con la batería llena el cargador corta y el valor se desploma con sol pleno. Medido el 31/07, día despejado:
+
+| hora | `photo_kohm` | `solar_mW` | `solar_v` |
+|---|---|---|---|
+| 14:20 | 0,88 | **2393** | 12,02 |
+| 15:20 | 0,94 | **79** | 13,33 |
+
+La luz no se movió y la potencia cayó **30×**. El delator es `solar_v` **subiendo**: el panel yéndose a circuito abierto. Y arrancaba **~3 h tarde** al amanecer.
+
+`internal/luminosity` es el hogar de la calibración (patrón de `internal/battery`). **Lo que costó fueron los dos refs**: anclar `dark_ref` en la oscuridad real da un gráfico que casi no se mueve, porque el crepúsculo se lleva **1,92 de las 3,29 décadas** de rango — 58,5% de la escala para media hora por día. Anclando en el crepúsculo (**50 kΩ**, con `sunny_ref` 0,5) la separación entre nublado y muy despejado pasa de 21 a **34 puntos**.
+
+Tres correcciones sobre la query de Grafana equivalente, por si se lleva allá:
+1. **El centinela 9999 se mapea a 0%, NO se filtra.** Es el 54% de las muestras (cubre todas las noches); descartarlo deja un hueco de 13 h que el gráfico interpola en silencio.
+2. **Guard contra `≤ 0`** — hay un 0,0 registrado en el bucket y `math.log(0)` es `-Inf`, que clampea a 100%.
+3. **Convertir por muestra y después promediar**, o las ventanas de amanecer y atardecer promedian el centinela con lecturas reales.
+
+### 4. El medidor central pasa a ser un estado, no una resta
+
+**El hallazgo más grande de la tanda.** El balance restaba `solar_mW - system_mW`, y esos dos **no están en las mismas unidades**: el del panel es continuo, el del sistema se mide durante el **3,6%** de cada ciclo en que el nodo está despierto. Es un pico, no un promedio.
+
+- **56%** de las muestras diurnas con buena luz reportaban déficit.
+- De esas **1099, ninguna** sobrevive prorratear el consumo (210 mW × 0,036 = 7,6 mW).
+- La batería coincidía: deriva diaria `0,000 / −0,036 / −0,020 / +0,112 / 0,000 V`. Plana.
+
+El caso reportado por Mau (batería llena, MPPT corta) es real pero es **18% del día**; el grueso son 1595 muestras (81%) donde el 45% decía déficit **mientras cargaba a 266 mW**.
+
+Prorratear por ciclo de trabajo **se evaluó y se descartó**: el ciclo no viaja en la telemetría y el deep sleep está sin medir. Un piso disfrazado de promedio.
+
+`internal/energy` clasifica cinco estados con las señales que sí pueden contestar. **Dos decisiones de diseño que no conviene re-derivar:**
+
+- **La tensión del panel es la señal primaria de "hay luz", no la fotorresistencia.** Separa día de noche con **0% de error** sobre 4972 muestras (máx. noche 4,16 V, mín. día 7,88 V; umbral 6,0 en el medio del hueco). Y evita un modo de falla: `sensors.cpp` emite el centinela 9999 tanto para "oscuridad total" como para **"sensor desconectado"**, así que una LDR despegada haría anunciar que no hay sol al mediodía. La LDR queda de respaldo para cuando el INA solar no reporta.
+- **"Lleno" se detecta por el panel en circuito abierto (≥12,5 V), no por tensión de batería.** El CN3791 sólo suelta el panel cuando la batería dejó de aceptar carga. Con el panel sobre 12,5 V el pack medía 4,084 V — bastante debajo de los 4,2 que un umbral ingenuo exigiría, porque `system_v` saguea bajo carga.
+
+La deriva sale del ring en memoria del bridge (sin queries nuevas) y se estima por **mediana de tercios**, no restando punta contra punta: medido en noche profunda, restar puntas da una dispersión p10-p90 de **0,048 V/h** y medianas de tercios la baja a **0,0030**. El umbral de 0,010 queda afuera de la banda de ruido con el segundo estimador y adentro con el primero.
+
+Validado sobre **5509 muestras**: 19-07h descargando, 09-15h y 16-17h cargando/llena, cero déficit en cinco días equilibrados.
+
+### Lo que salió de acá y no es de esta tanda
+
+- **El consumo de reposo pesa más que la ventana activa** — ver `weather-station-station-iot/componentes_y_conexiones.md`. Estimado desde la caída nocturna de la batería: **5,10 mA** totales, de los cuales la ventana activa explica 1,86 mA. Quedan **~3,2 mA (63%)** sin explicar. En mAh/día: activo 44,7 · resto 77,7 · **total 122,4**. Los LEDs están todos descartados (Mau confirmó DS18B20 y ESP32 desoldados); el sospechoso es el **reposo del step-up boost**. **Pendiente: medirlo con multímetro** — no hay firmware que lo resuelva, el INA219 se apaga al dormir.
+- **Promediar el consumo en el firmware** — acordado que es conceptualmente correcto: es *adquisición*, no derivación, porque la dinámica sub-segundo del burst de WiFi **no existe en la telemetría** y ningún backend puede recuperarla. No es análogo al punto de rocío, que sí es función pura de datos publicados. Recomendación: publicar la **integral y la ventana por separado** (`active_mAs` + `awake_ms`), no el promedio masticado, para que el backend pueda recalcular sin reflashear — y de paso el ciclo de trabajo dejaría de ser una constante hardcodeada. El INA219 tiene promediado por hardware (128 muestras, 68,10 ms); leyendo a esa cadencia se cubre casi el 100% de la ventana. Ojo: la librería Adafruit no lo expone, hay que escribir el registro `0x00` después de `setCalibration_*()`.
 
 ## ✅ Tendencia de batería: el gráfico se duplicaba con cada reflash (2026-07-31)
 
