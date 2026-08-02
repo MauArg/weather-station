@@ -4,6 +4,43 @@
 
 _Última actualización: 2026-08-02_
 
+## 🔄 Limpieza Spanglish → inglés (en curso, arranca 2026-08-02)
+
+Sesión dedicada exclusivamente a dejar el código de los 3 repos 100% en inglés (identificadores, comentarios, strings, texto de UI), como base para una futura sesión que implemente un sistema de i18n (selector EN/ES en la UI, hoy hardcodeado). Es el mismo pendiente ya anotado en "Pendientes de UI, revisados y anotados para atacar más adelante" (2026-07-29), más abajo en este archivo.
+
+**Alcance acordado con Mau:**
+- Sólo código + UI. La documentación narrativa (este archivo, los `CLAUDE.md`, `README.md`, `componentes_y_conexiones.md`, `aprendizajes_y_roadmap.md`, `backend_api_specs.md`, `datos_backend.md`, `logging_system_design.md`) queda en español a propósito.
+- Los archivos de hardware (`.fzz` de Fritzing, exports de PCB, el esquemático PNG) quedan **excluidos** de esta pasada — no son código editable como texto y `CLAUDE.md` pide investigar antes de tocar cualquier cosa de hardware.
+- Orden: **frontend → backend → IoT**.
+- Commits: varios por módulo dentro de cada repo, no uno solo gigante, para que sea revisable.
+
+**Hallazgo clave, vale para las tres pasadas:** los identificadores ya estaban en inglés en todos lados — nombres de función/variable/struct, `json:"..."` tags del backend, tópicos MQTT (`station/<id>/telemetry|status|cmd|log/req|log/data`), keys de `localStorage` (`pressureMode`). Esto convierte la tarea en **traducir comentarios y strings literales**, no en renombrar símbolos que rompan el contrato entre repos o dejen huérfanos datos históricos en InfluxDB. Si en el backend o el IoT aparece algún identificador realmente en español (variable, campo, tópico), parar y confirmar con Mau antes de renombrarlo — ninguno apareció en el frontend, pero no está garantizado en los otros dos repos.
+
+**Regla aplicada para no romper comportamiento real:** valores que afectan el formato/idioma que ve el usuario final —`'es-AR'` pasado a `toLocaleString`/`toLocaleTimeString`, `America/Argentina/Buenos_Aires`, el reemplazo de `.` por `,` en `CalendarView.formatTemp`— **se dejaron intactos**. No son "código en español": son configuración de runtime, y ya estaban anotados en este mismo archivo (sección "Pendientes de UI") como parte deliberada del trabajo de i18n que viene, no de esta limpieza.
+
+**Hallazgo no obvio para la sesión de i18n que viene:** no todo el texto de UI vive en el frontend. `internal/battery/battery.go` (backend) arma strings como los de `TierLabel`/`RiskNote` que el backend le manda al frontend y éste sólo muestra tal cual. La extracción a i18n va a necesitar tocar ese archivo también, no sólo `components/`.
+
+### ✅ Frontend — terminado (2026-08-02)
+
+Los 22 archivos de `src/` más `eslint.config.js` y `vite.config.js`. 7 commits, todos pusheados:
+`ad1e058` utils/services · `601830b` app shell + dashboard/calendario · `46a49c9` service mode entry + componentes chicos · `76ea941` BatteryPanel + NodeHealthPanel · `4cdeaba` OtaWizard + PayloadViewer · `7ece61e` LogPanel.jsx (692 líneas, el archivo más grande) · `867f7df` eslint.config.js + vite.config.js.
+
+Verificado `npm run lint` y `npm run build` limpios después de cada tanda. Barrido final por caracteres acentuados y palabras sueltas comunes (esta/esto/solo/aquí/etc.) sobre todo `src/` — cero coincidencias.
+
+`datos_backend.md`, `backend_api_specs.md` y `README.md` quedaron en español (documentación, fuera de alcance).
+
+### ⏳ Backend — pendiente, arranca acá la próxima sesión
+
+Relevado pero **sin tocar todavía**: 29 archivos `.go`, 12 con contenido en español (detectados por grep de tildes/ñ). La mayoría entre 20-300 líneas; `internal/mqttbridge/bridge.go` es el más grande con 808 y `internal/mqttbridge/logs.go` le sigue con 453 — van a necesitar leerse y trabajarse aparte, como LogPanel.jsx en el frontend.
+
+Del muestreo que sí se hizo (`internal/battery/battery.go`, `internal/models/*.go`): identificadores y JSON tags en inglés, comentarios ya mayormente en inglés, pero varios strings de negocio en español (`TierLabel`, `RiskNote` en `battery.go`) que se devuelven al frontend — ver el hallazgo de arriba.
+
+**Al retomar:** agrupar en commits por paquete (`internal/battery`, `internal/energy`, `internal/luminosity`, `internal/mqttbridge`, `internal/logdecode`+`internal/logdict`, `internal/database`, `internal/api/handlers`+`routes`, `internal/models`, `cmd/server`+`internal/config`+`internal/version`), traducir, y cerrar con `go build && go vet && go test ./...` antes de pushear. Nota de entorno: en esta máquina el tool de Bash no tiene `git`/`go`/`npm` en el PATH — usar PowerShell para todo eso.
+
+### ⏳ IoT firmware — pendiente
+
+Relevado sólo por encima: `src/` tiene 13 archivos (10 con contenido en español, comentarios densos + probablemente `Serial.print` de debug), más `infra/` (docker-compose, mosquitto.conf) y `tools/` (excluir `.pio` de `tools/wifi-sniffer/`, que es build/vendor de terceros). Sin arrancar todavía.
+
 ## ✅ Versión 1.2.0 — desplegada y verificada (2026-08-02)
 
 > Desplegada por Mau (las dos imágenes) y verificada contra la Pi: `GET /api/v1/version` responde `1.2.0`, `/weather/current` trae `pressureQnh`, `batteryVolts`, `luminosity` y `energyState`.
