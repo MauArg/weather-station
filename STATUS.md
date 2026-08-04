@@ -2,7 +2,7 @@
 
 > Actualizar este archivo al final de cada sesión de trabajo relevante. Es el punto de partida para la siguiente conversación — ver política en [`CLAUDE.md`](./CLAUDE.md).
 
-_Última actualización: 2026-08-02_
+_Última actualización: 2026-08-03_
 
 ## ✅ Limpieza Spanglish → inglés — terminada, los 3 repos (2026-08-02)
 
@@ -54,6 +54,25 @@ Verificado con `pio run` (environments `production`, `development` del firmware 
 **Nota de seguridad, sin resolver, no es parte de esta limpieza:** `tools/brokerprobe/main.go` tiene un default hardcodeado para el flag `--pass` (`aXdC7nE2gLEe`) que parece una contraseña MQTT real, commiteada en un repo de GitHub. No se tocó porque no es texto en español y cambiarlo no estaba pedido — queda anotado acá para que Mau decida si hay que rotarla y sacarla del default.
 
 `aprendizajes_y_roadmap.md`, `componentes_y_conexiones.md`, `Readme.md`, `PCB/README.md`, `tools/brokerprobe/README.md`, `logging_system_design.md` y `CLAUDE.md` quedaron en español (documentación, fuera de alcance). Los archivos de hardware (`.fzz`, exports de `PCB/`, los `.svg`/`.html` de esquemático) no se tocaron.
+
+### ✅ Verificación de "sin cambios funcionales" + bump de versión, los 3 repos (2026-08-02)
+
+Mau pidió confirmar explícitamente que la limpieza no tocó comportamiento antes de flashear/deployar, con foco en el firmware por ser lo más costoso de arreglar si algo sale mal.
+
+**Método**: tomar el diff completo de cada repo desde el commit anterior a la limpieza, "vaciar" el contenido de todos los strings y comentarios (dejar sólo el esqueleto de código real) y comparar viejo vs. nuevo. Cualquier línea donde el esqueleto cambiara —algo *fuera* de un string o comentario— quedó marcada para revisión manual, línea por línea. Sobre 26 archivos de IoT + 14 de backend + 18 de frontend, **cero cambios de código real**: todo lo marcado fue reflow de comentarios multilínea (el español y el inglés envuelven distinto), texto de UI/logs traducido, o placeholders de ejemplo (`CAMBIA_ESTO`→`CHANGE_THIS`). Un solo caso de identificadores renombrados (`tools/brokerprobe/linkstate.py`: `fotos`→`snapshots`, `grupos`→`groups`, `conectados`→`connected`), verificado sin referencias sueltas y compilando limpio.
+
+Chequeo aparte y específico para el firmware: la tabla `LOG_CODES` (el diccionario que decodifica el backend) mantiene los mismos 14 códigos, mismo número de argumentos y misma secuencia `%a`/`%b` por entrada — sólo cambió el texto humano.
+
+**Dos consecuencias de comportamiento, no roturas, que motivaron el bump:**
+1. `_dictFingerprint()` en `logging.cpp` hashea el texto de las plantillas de `LOG_CODES`, así que cambió. Al primer boot con este firmware dispara el mecanismo ya existente para "cambió el diccionario" (resetea nivel y ring de logs en RTC) — mismo camino que cualquier firmware que agregue/reordene códigos, no es nuevo. Si hay una captura corriendo en el nodo de campo al momento de flashear, se pierde — comportamiento esperado, no un bug.
+2. El caché de diccionario del backend (`internal/logdict`) está indexado por `FIRMWARE_VERSION`. Sin bump, el backend seguía sirviendo el diccionario viejo (español) cacheado para "1.13.1" y el texto traducido no se hubiera visto reflejado en el LogPanel.
+
+**Bump aplicado** (sin cambios funcionales, PATCH, para que la build sea distinguible de la anterior):
+- IoT: `1.13.1` → `1.13.2` (`platformio.ini`, envs `production` y `development`) — commit `4c0d262`.
+- Backend: `1.2.0` → `1.2.1` (`internal/version/version.go`) — commit `a566cb4`.
+- Frontend: `1.2.0` → `1.2.1` (`package.json`) — commit `b4145b7`.
+
+Los tres repushados. Verificado que compilan/buildean limpio después del bump: `pio run -e production` (IoT), `go build ./... && go vet ./...` (backend), `npm run lint && npm run build` (frontend).
 
 ## ✅ Versión 1.2.0 — desplegada y verificada (2026-08-02)
 
