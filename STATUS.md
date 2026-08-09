@@ -96,6 +96,20 @@ Con `photo_kohm` = 9999 (centinela de oscuridad) y `solar_v` = 3,6 V, muy por de
 - **El panel decía "running" hasta un minuto de más** — `live_seq` sigue en la última telemetría hasta que llega la siguiente, un ciclo de sueño después.
 - **Faltaba la antigüedad** en "última sesión terminó porque…", que sobrevive hasta el próximo status. Es el mismo problema que el dashboard ya había resuelto con `formatAge`.
 
+### Dos cosas que la primera sesión real destapó en la UI (2026-08-09)
+
+Ambas resultaron ser **backend**, no frontend, más un campo nuevo del nodo. Firmware `1.18.0` y backend `1.3.2`.
+
+**1. La cuenta regresiva seguía esperando al nodo a los ~64 s** mientras publicaba cada 5. El intervalo salía de `expectedIntervalSec`, una constante del backend cuyo propio comentario admite haber sido calibrada midiendo InfluxDB sobre 23 ciclos.
+
+**El nodo ahora reporta `next_s`** — los segundos hasta la próxima publicación: `SLEEP_INTERVAL_SEC` en el ciclo normal, `interval_sec` durante una sesión live. El backend lo usa y **suma el overhead de despertar sólo fuera de live**, porque un ciclo dormido lo gasta en WiFi, MQTT y la espera del retenido antes de publicar, mientras que dentro de una sesión el nodo ya está asociado y entre publicaciones sólo está la lectura de sensores. Firmware viejo omite el campo y el supuesto de 60 queda como fallback.
+
+Se hizo en el firmware y no en el backend porque **el backend no puede inferirlo**: `interval_sec` es parámetro del comando (2–60 s), y con los tiers pasaría a ser función del voltaje del pack, que ningún comando declara. Cuesta ~12 B sobre ~220 B de margen.
+
+**2. El `boot_count` congelado se reportaba como falla grave.** Incrementa en `setup()`, así que queda fijo toda la sesión y cada payload posterior al primero lo repite. `current == prev` caía en la rama `current <= prev` y salía como *"RTC memory wiped with no reflash — watchdog or brownout signature"*: **la nota más alarmante del catálogo, una vez por intervalo**, con el nodo funcionando perfecto. Ahora es su propio caso — silencioso en live mode, y fuera de live un `duplicate` que dice lo que realmente significa (el mismo ciclo entregado dos veces) en vez de inventar un reset.
+
+**Decisión: `next_s` no se agregó a N8N.** El backend lo lee del payload MQTT directo, así que la funcionalidad no depende de InfluxDB; como dato histórico es derivable y vale 60 en el 99% de los puntos. **Reevaluar cuando lleguen los tiers**, que es cuando deja de serlo. Ver `weather-station-station-iot/aprendizajes_y_roadmap.md`.
+
 ### Pendientes
 
 - **Auto-armado sin estrenar**: `LIVE_AUTO_ENABLED` sigue en `false`. La lógica nunca corrió contra un día real con excedente.
