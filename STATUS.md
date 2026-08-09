@@ -59,11 +59,47 @@ Está bien **como piso de seguridad** — cortó, y el pack sólo bajó 0,02 V. 
 - El acumulador se **reseteaba aunque el clear del retenido fallara**, regalando presupuesto completo a la re-entrada.
 - `LOG_PUBLISH_OK` es nivel 2, así que una captura en nivel 2-3 se llevaba **una entrada por publicación**: 360 de un ring de 768 en 30 min, y siete vueltas completas en 8 h. Ya no se escribe en live mode — `live_seq` contesta lo mismo desde el lado receptor, y las horas no habrían servido igual porque `ms` satura a los 65 s y `boot_count` queda congelado toda la sesión.
 
+### ✅ Pasos 2 y 3 — completos y desplegados (2026-08-09)
+
+**En producción: firmware `1.17.0`, frontend `1.3.0`, backend `1.3.1`.**
+
+**Paso 2 — el backend arma y desarma solo** (`internal/mqttbridge/live.go`). El hallazgo que definió el diseño: **`energy.Assess` no puede ser la señal de armado.** Con el pack lleno el CN3791 cicla, y `Assess` devuelve `StateFull` sólo durante la fase de corte, que es el 22% del tiempo — armar con eso armaría en los huecos y desarmaría durante la carga real. La señal correcta es una ventana: **¿el panel llegó a circuito abierto alguna vez en los últimos 15 min?**
+
+| | condición |
+|---|---|
+| Entrada | ventana de excedente · luminosidad ≥ 65% · slot retenido libre · cooldown cumplido |
+| Salida | luminosidad < 45% |
+| Sesión | 5 s, 60 min, renovable |
+
+Entrada y salida usan señales **distintas** a propósito: una vez corriendo, live mode es carga suficiente para frenar el cicleo del charger por sí solo, así que "se fue el excedente" pasa a ser una lectura auto-infligida. La luminosidad se mide independiente de lo que hace el nodo.
+
+**Apagado por defecto** (`LIVE_AUTO_ENABLED=false`, documentado en `.env.example`). Prenderlo significa que el nodo deja de dormir sin que nadie lo pida.
+
+**Paso 3 — panel en la vista de service mode** (`components/service/LivePanel.jsx`). Deriva el estado del nodo, nunca de lo que la vista publicó, con tres fuentes que contestan tres preguntas: `retained.cmd` (qué se le ordenó, cierto apenas se arma), `live_seq` (qué hace de verdad, cierto recién cuando arrancó) y `status` (elapsed/remaining). Un nodo dormido tarda hasta un ciclo en levantar el comando, así que "armado" y "corriendo" son estados separados. `Force` es un botón propio y no un checkbox, porque saltea un piso de seguridad. `Stop` manda `clear`, no un comando propio: un retenido vacío es lo que todos los modos leen como "pará".
+
+### Validación end-to-end en campo (2026-08-09, de noche)
+
+Con `photo_kohm` = 9999 (centinela de oscuridad) y `solar_v` = 3,6 V, muy por debajo del piso de 6,0 V:
+
+- Se armó con **`force`** desde el botón → el firmware salteó el piso de panel. Una sesión normal habría salido con `no_sun` en el `live_seq` 3.
+- Corrió a 5 s con `live_seq` 1→6, y se cortó desde el botón **Stop** → `cleared_by_server`, `retained: null`.
+- **El backend no armó solo**, correcto: con la luminosidad en el piso la condición de entrada del 65% no se acerca.
+- **`live_seq` llega a InfluxDB** — el mapeo de N8N quedó actualizado.
+
+### Bugs encontrados en las pasadas de revisión de los pasos 2 y 3
+
+- **Bloqueo del router MQTT.** `evaluateLiveAuto` publicaba desde adentro de un callback de paho, con el cliente en `OrderMatters` = true (su default): el router despacha de a uno desde una goroutine, así que el `tok.WaitTimeout(5s)` esperaba sobre un router bloqueado en esa misma llamada. Congelaba todo el procesamiento MQTT hasta 5 s por armado. Los publish pasaron a goroutine, con el cooldown seteado **antes** de lanzarla para que no arme dos veces.
+- **Bucle de re-armado cada 5 min.** Los dos lados juzgan con sensores distintos; con el panel sombreado y el LDR viendo cielo claro, el nodo salía por `no_sun` a los 15 s y el backend re-armaba a los 5 min, todo el día. Ahora `onStatus` lee el `reason`: si el nodo salió por uno de sus propios pisos, el cooldown pasa a 60 min.
+- **La automatización pisaba al operador.** El cooldown sólo corría cuando el backend terminaba la sesión, así que pararla a mano la re-armaba enseguida. Ahora arranca con cualquier comando que abandone el slot — lo que además evita saltar a live justo después de un OTA, cuando el ciclo normal es lo que se quiere mirar.
+- **`remaining_s` vs `remaining_sec`** — el heartbeat del `1.16.0` usaba el nombre corto, que el backend no parsea. El campo se descartaba en silencio, anulando el motivo entero del heartbeat.
+- **Tooltip mudo** — el botón Force tenía `data-tip` sin la clase `svc-tip`. Verificado renderizado en Chrome tras el fix.
+- **El panel decía "running" hasta un minuto de más** — `live_seq` sigue en la última telemetría hasta que llega la siguiente, un ciclo de sueño después.
+- **Faltaba la antigüedad** en "última sesión terminó porque…", que sobrevive hasta el próximo status. Es el mismo problema que el dashboard ya había resuelto con `formatAge`.
+
 ### Pendientes
 
-- **Paso 2 — backend**: evaluar `energy.Assess` + luminosidad para armar/desarmar solo, más un watchdog de pared como el de service mode. Ojo: **live y service mode no se pueden encolar** (mismo slot retenido, semántica "vacío = terminar"), así que hay que limpiar y después setear.
-- **Paso 3 — UI**: botón en la vista de service mode. El backend ya tiene `case "raw"`, así que hoy funciona sin cambios de backend; un `case "live"` propio daría clamping y un `note` honesto.
-- **Flashear el `1.16.0`** (heartbeat).
+- **Auto-armado sin estrenar**: `LIVE_AUTO_ENABLED` sigue en `false`. La lógica nunca corrió contra un día real con excedente.
+- **Los umbrales de luminosidad (65%/45%) son de primera pasada**, con los anclajes medidos escritos al lado en `models/service.go` para afinarlos con datos.
 
 ## ⚠️ El mapeo de campos de N8N descarta en silencio lo que no conoce (2026-08-09)
 
