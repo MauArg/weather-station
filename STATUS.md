@@ -110,6 +110,20 @@ Se hizo en el firmware y no en el backend porque **el backend no puede inferirlo
 
 **Decisión: `next_s` no se agregó a N8N.** El backend lo lee del payload MQTT directo, así que la funcionalidad no depende de InfluxDB; como dato histórico es derivable y vale 60 en el 99% de los puntos. **Reevaluar cuando lleguen los tiers**, que es cuando deja de serlo. Ver `weather-station-station-iot/aprendizajes_y_roadmap.md`.
 
+**Verificado en campo (2026-08-09), firmware `1.18.0` + backend `1.3.2`:**
+
+- Ciclo normal: el nodo reporta **`next_s` = 60** y el backend calcula `expectedIntervalSec` = **64** (60 del nodo + 4 de overhead). El número dejó de ser una constante calibrada a mano.
+- Sesión live forzada de noche (`solar_v` 3,60 V, muy por debajo del piso): **`boot_count` congelado en [5]** toda la sesión y **cero anomalías acumuladas**. El síntoma reportado —"reset espontáneo de RTC, firma de watchdog o brownout" una vez por intervalo— desapareció.
+- Entrega: 104 recibidos de 106 publicados = **1,9%**. Más alto que el 0,19% de la sesión larga anterior, pero sobre 106 muestras contra 535: dos pérdidas mueven mucho el porcentaje con n chico. **A vigilar, no a actuar.**
+
+### Volumen de InfluxDB con live mode — relevado, no es un problema (2026-08-09)
+
+Duda de Mau sobre si la base aguanta el volumen proyectado a años. Medido: **el volumen no es el recurso escaso; el barrido de consultas sí.**
+
+Con live 7 h en días soleados el ritmo pasa de ~1.350 a ~5.760 payloads/día (**4,3×**, no 12× — live se auto-limita a las horas de excedente). Son **~170 MB/año, ~1,7 GB en 10 años**: sobre el disco de 4 TB del NAS, **0,04%**.
+
+Lo que sí escala mal es escanear millones de puntos de 5 s para un gráfico de rango largo. **Disparador a vigilar: si un dashboard de rango largo empieza a tardar, la respuesta es downsampling**, no borrar datos ni achicar live mode. Análisis completo, más las notas sobre la retención infinita y la cardinalidad del tag `firmware`, en `weather-station-station-iot/aprendizajes_y_roadmap.md`.
+
 ### Pendientes
 
 - **Auto-armado sin estrenar**: `LIVE_AUTO_ENABLED` sigue en `false`. La lógica nunca corrió contra un día real con excedente.
