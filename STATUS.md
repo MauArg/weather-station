@@ -2,7 +2,123 @@
 
 > Actualizar este archivo al final de cada sesión de trabajo relevante. Es el punto de partida para la siguiente conversación — ver política en [`CLAUDE.md`](./CLAUDE.md).
 
-_Última actualización: 2026-08-03_
+_Última actualización: 2026-08-09_
+
+## ✅ Live mode — implementado y validado en campo (2026-08-08/09)
+
+Primer tier con caso de uso concreto: en un día despejado con la batería llena el charger ya está tirando energía a la basura, así que el nodo **deja de dormir y publica cada 5 s** en vez de cada 60.
+
+**Firmware `1.15.0`** (comando `live`) y **`1.16.0`** (heartbeat de sesión). El `1.15.0` corrió en campo; el `1.16.0` está commiteado y **sin flashear**.
+
+### Decisión de diseño: live NO cuelga de la escalera de tiers
+
+`battery.Tier()` es función pura del voltaje del pack y describe **descartar carga mientras la batería se vacía**. Live es lo contrario: **gastar excedente mientras carga**. Y los dos ejes ya estaban en desacuerdo antes de esta sesión — `energy.Assess` llama `StateFull` al sistema con el panel arriba de 12,5 V, donde el pack mide ~4,084 V de mediana, que `battery.Tier()` reporta como **Tier 2**. Gatear live en "Tier 1" lo habría hecho negarse a entrar exactamente cuando el sistema está más lleno. Son modos ortogonales, no una sola escalera.
+
+### Arquitectura: el backend decide, el firmware tiene pisos propios
+
+La política vive en el backend porque ahí están la escala calibrada de `luminosity` y el histórico de deriva. **Nada de eso está implementado todavía** (ver pendientes) — hoy se arma a mano.
+
+El nodo mantiene cuatro salidas independientes de lo que el backend crea:
+
+| piso | umbral | notas |
+|---|---|---|
+| Sol | `solar_v < 6,0 V` | igual a `energy.PanelDaylightV` |
+| Batería | `system_v < 3,90 V` | igual a `energy.LowBatteryV` |
+| Presupuesto | `timeout_min`, acumulado en RTC | absoluto entre re-entradas |
+| MQTT | reconexión agotada | sin broker no hay a quién publicar ni cómo recibir el stop |
+
+Los dos primeros exigen **3 lecturas consecutivas**, y un `NaN` no cuenta como strike — un sensor que no contestó no dice nada sobre el panel ni sobre el pack.
+
+**El flag `force`** saltea sólo el piso de sol, para poder probar de noche o en banco. `parseCommand()` capea las sesiones forzadas a **30 min** contra las 8 h normales, y el motivo es aritmético: forzar quita el piso que normalmente termina una sesión que no debería estar corriendo, y llegar al piso de batería desde ~4,05 V con ~70 mA lleva del orden de 6 h porque la curva de la LiPo es plana justo ahí. Una sesión forzada podía quemar un tercio del pack de noche antes de que saltara nada.
+
+### Resultados de campo (2026-08-08)
+
+Dos sesiones reales, `1.15.0`:
+
+| | sesión 1 | sesión 2 |
+|---|---|---|
+| duración | 902 s | **2802 s** |
+| publicaciones | 172 | **535** |
+| salida | `timeout` | **`no_sun`** |
+
+- **Cadencia real: 5,24 s por ciclo**, no 5,00. `interval_sec` es el tiempo *entre* publicaciones; el trabajo de leer sensores (~250 ms) se suma. Consistente en las dos sesiones.
+- **Pérdida a 5 s: 1 de 535 = 0,19%**, contra 0,3% del ciclo normal a 60 s. **Publicar 12× más seguido no degradó la entrega.** Conteo exacto contra el `seq` del nodo, y el segmento en InfluxDB coincide al segundo con el `elapsed_s` reportado.
+- **Costo energético, medido por primera vez: 53,1 mA × 2802 s = 41,3 mAh, o ~53 mAh por hora.** Contra los ~47 mAh/día del ciclo normal, **una hora de live cuesta como 1,1 días de operación normal**. Es el número para decidir cuándo conviene.
+- **Los strikes se ganaron su lugar.** Los últimos ciclos antes del corte: `6,12 → 6,21 → 5,96 → 6,02 → 6,09 → 5,42 → 4,35 → 5,17`. Oscilando sobre el piso de 6,0 V. Sin la regla de 3 consecutivos habría cortado varios minutos antes, en el primer 5,96.
+
+### Hallazgo: el piso de sol es un test de "está oscuro", no de "hay excedente"
+
+El Voc de un panel se sostiene alto con poca luz y sólo colapsa cerca de la oscuridad. Durante la sesión 2, con `photo_kohm` ya en 8 kΩ (~35% de luminosidad, atardecer), `solar_v` todavía marcaba 6 V. Mientras tanto el panel entregaba ~55 mW contra los ~212 mW del nodo: **live mode corrió a déficit los últimos minutos**.
+
+Está bien **como piso de seguridad** — cortó, y el pack sólo bajó 0,02 V. Pero confirma que la señal de entrada/salida real tiene que ser luminosidad + `energy.StateFull`, no voltaje de panel. Eso es justamente lo que el paso 2 pone en el backend.
+
+### Bugs encontrados en las pasadas de revisión previas al flasheo
+
+- **Habría hecho que live mode no funcionara nunca**: el callback marcaba la sesión como cancelada ante *cualquier* mensaje en `TOPIC_CMD`, y el comando `live` es retenido — el broker lo reentrega en el instante del `subscribe()`. La sesión habría terminado en la primera pasada del loop, siempre. Ahora sólo cuenta un payload vacío, igual que service mode.
+- El presupuesto **sub-contaba**: `elapsed` se leía antes de `publishTelemetry()` y se usaba después.
+- El acumulador se **reseteaba aunque el clear del retenido fallara**, regalando presupuesto completo a la re-entrada.
+- `LOG_PUBLISH_OK` es nivel 2, así que una captura en nivel 2-3 se llevaba **una entrada por publicación**: 360 de un ring de 768 en 30 min, y siete vueltas completas en 8 h. Ya no se escribe en live mode — `live_seq` contesta lo mismo desde el lado receptor, y las horas no habrían servido igual porque `ms` satura a los 65 s y `boot_count` queda congelado toda la sesión.
+
+### Pendientes
+
+- **Paso 2 — backend**: evaluar `energy.Assess` + luminosidad para armar/desarmar solo, más un watchdog de pared como el de service mode. Ojo: **live y service mode no se pueden encolar** (mismo slot retenido, semántica "vacío = terminar"), así que hay que limpiar y después setear.
+- **Paso 3 — UI**: botón en la vista de service mode. El backend ya tiene `case "raw"`, así que hoy funciona sin cambios de backend; un `case "live"` propio daría clamping y un `note` honesto.
+- **Flashear el `1.16.0`** (heartbeat).
+
+## ⚠️ El mapeo de campos de N8N descarta en silencio lo que no conoce (2026-08-09)
+
+Al intentar medir la pérdida de live mode se descubrió que **`live` y `live_seq` no llegaban a InfluxDB**. No es cosa de live mode: `log_active` y `log_count` tampoco estaban, y existen desde el `1.3.0` del 28 de julio.
+
+El workflow de N8N arma Line Protocol desde un `fieldMap` explícito, así que **cualquier campo que el firmware agregue es invisible en InfluxDB hasta que se edite ese script a mano**. No está versionado en ningún repo (ver "Deuda conocida"). Al subsistema de viento le va a pasar lo mismo.
+
+**Corregido el 2026-08-09**: Mau agregó los cuatro campos. Notas del código revisado:
+
+- El script escribe **todos los booleanos como `0i`/`1i`**, que es correcto. El `type conflict: bool != int` que rompe cualquier query agregada sobre `dht11_ok` en el histórico viene de **datos viejos**, no de este script.
+- `solar_mW` y `system_mW` se escriben como enteros (`${p.solar_mW}i`) y funciona **por casualidad**: el `Adafruit_INA219` con la calibración 32V/2A tiene `powerMultiplier = 2`, así que la potencia siempre sale múltiplo entero. Si esa calibración cambia, `${256.4}i` sería Line Protocol inválido.
+- **No se manda timestamp**, así que InfluxDB usa hora de ingesta. Por eso a 5 s se ven intervalos de 2-4 s que el firmware no generó. `live_seq` es exacto igual; los deltas de tiempo no sirven para medir cadencia.
+
+## ✅ Validación del `DHT_WARMUP_MS` 2000 → 1300 (2026-08-09)
+
+**Sin evidencia de problema.** Cero fallos de `dht11_ok`, y el corrimiento aparente del delta contra el DS18B20 resultó ser **confundidor horario**, no el warmup:
+
+| firmware | franja 19:40-20:20 UTC | n | mediana | % negativo |
+|---|---|---|---|---|
+| `1.13.2` (warmup 2000) | misma franja | 78 | −0,30 | **95%** |
+| `1.13.2` (warmup 2000) | resto del día | 2781 | 0,00 | 44% |
+| **`1.14.0` (warmup 1300)** | misma franja | 36 | −0,40 | 100% |
+
+El firmware **sin cambiar** ya daba −0,30 y 95% negativo en esa misma franja: el enfriamiento de la tarde hace que el DHT22 —masa térmica chica— siga la caída más rápido que el DS18B20, y la ventana de `1.14.0` cayó entera adentro de ese transitorio. El residuo de ~0,1 °C está en la resolución del propio sensor.
+
+**Método que vale reusar**: comparar distribuciones entre firmwares sin controlar la hora del día lleva a conclusiones falsas en cualquier magnitud con ciclo diurno. La validación sigue corriendo sola porque `1.15.0` y `1.16.0` llevan el mismo warmup.
+
+## 🔎 El charger cicla, y el backend está aliasando ese cicleo (2026-08-09)
+
+Analizado a pedido de Mau, que notaba "carga un ratito, corta, y después picos de generación". **Son ciclos cortos de carga/corte** — no el panel alimentando el módulo.
+
+Un día despejado (2026-08-07, 9 h): **14 rachas de carga y 15 de corte**.
+
+| fase | % del tiempo | `solar_mA` | `solar_v` | `system_v` |
+|---|---|---|---|---|
+| Cargando | 78% | 197 mA | 12,28 V | **4,192 V** |
+| Cortado | 22% | 6,5 mA | ~14,1 V | **3,97 V** |
+
+La firma está en las transiciones: al cortar, el panel **sube** a ~14,2 V (circuito abierto) y la corriente se desploma; al arrancar, **baja** a ~11,5 V (Vmp bajo carga) y salta a ~200 mA. Es terminación por CV más auto-recarga con histéresis, el comportamiento normal de un CN3791 con el pack lleno. Las rachas largas (hasta 3,7 h) son la carga real de la mañana; el cicleo corto aparece recién cuando ya está lleno.
+
+### La consecuencia: tres valores del dashboard oscilan con el charger
+
+| valor | lógica | en carga | en corte |
+|---|---|---|---|
+| SoC | `socCurve` sobre `system_v` | ~99% | **~75%** |
+| `Charging` | `solar_mA >= 20` | true | **false** |
+| `energyState` | `solar_v >= 12,5 → StateFull` | charging | **full** |
+
+Ninguno está mal muestra a muestra: muestrean cada 60 s un proceso que cicla cada 1-10 min y reportan la fase instantánea.
+
+**El más engañoso es el SoC.** En fase de corte el pack está **lleno** —acaba de terminar la carga en 4,2 V— y sin embargo lee 3,97 V, que la curva traduce a **~75%**. Son ~25 puntos de error sistemático, y aparecen justo cuando el sistema está en su mejor momento. `battery.go` ya advierte que es una curva en reposo y que `system_v` se mide con WiFi arriba; esto lo agrava.
+
+Dato que confirma lo hundido de la lectura: hay muestras de `system_v` en **4,268 y 4,276 V**, por encima del 4,20 con que arranca `socCurve`. Es el pack durante carga activa. La curva las clampea a 100%, así que no rompe nada, pero el rango real desborda la tabla por los dos lados.
+
+**Propuesta, no implementada**: derivar esos tres valores de una ventana y no de la última muestra. `energy` ya tiene la filosofía correcta —usa `DriftVPerH` sobre horas porque la batería es lo único que integra energía—; el SoC y el flag de carga quedaron instantáneos y desalineados con eso. Un máximo móvil de `system_v` sobre ~15 min daría el voltaje de la fase de carga, mucho más cercano al estado real del pack.
 
 ## ✅ Limpieza Spanglish → inglés — terminada, los 3 repos (2026-08-02)
 
