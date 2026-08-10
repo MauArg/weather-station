@@ -2,7 +2,55 @@
 
 > Actualizar este archivo al final de cada sesión de trabajo relevante. Es el punto de partida para la siguiente conversación — ver política en [`CLAUDE.md`](./CLAUDE.md).
 
-_Última actualización: 2026-08-09_
+_Última actualización: 2026-08-10_
+
+## 🚧 i18n EN/ES — código completo y pusheado, falta verificar y desplegar (2026-08-10)
+
+**Sesión cortada por hora, no por bloqueo.** Todo lo escrito está commiteado y pusheado en los dos repos. Nada quedó en el working tree.
+
+> ⚠️ **Nada de esto está desplegado.** La Pi sigue corriendo backend `1.3.2` y frontend `1.3.0`. El estado de campo no cambió.
+
+Plan completo (contexto, decisiones y verificación) en `C:\Users\maulp\.claude-personal\plans\generic-doodling-lovelace.md`.
+
+### Las cuatro decisiones acordadas, para no re-derivarlas
+
+| | decisión | por qué |
+|---|---|---|
+| Librería | **react-i18next** | Por `<Trans>`. Buena parte de la prosa lleva markup en medio de la oración (`<Tip>` en LivePanel, `<code>` en OtaWizard, `<strong>`/`<em>` en el ConfirmDialog de LogPanel). Sin él hay que partir cada frase en fragmentos y el traductor nunca ve la oración entera. |
+| Formato regional | **Fijo en `es-AR` / ART, en los dos idiomas** | La estación está en Argentina y el backend corta sus días en medianoche local: ART y el reloj de 24 h son propiedades del dato, no preferencia del lector. Sólo cambian las palabras. |
+| Texto del backend | **Backend manda códigos, frontend escribe** | Extiende el patrón que ya usaban `RISK_UI`, `NODE_STATE_UI`, `EXIT_REASON`. |
+| Firmware | **Queda afuera** | `_dictFingerprint()` hashea los templates de `LOG_CODES`: editarlos resetea el ring de logs en RTC y fuerza re-fetch del diccionario. Los 14 códigos se traducen en el frontend por nombre. |
+
+**Corregida una premisa de `utils/timezone.js`**, que decía que el locale tenía que venir de la capa de lenguaje. Son dos ejes que se mueven independiente.
+
+### Lo hecho
+
+**Frontend `1.4.0` → 8 commits, pusheados.** Infraestructura (i18next + detector + toggle EN|ES en el navbar), y los 14 componentes migrados: dashboard, calendario, shell y los nueve de service mode. **413 claves por idioma, cero desajustes de paridad.** Lint y build limpios.
+
+**Backend `1.4.0` (`8fcc091`), pusheado.** Cuatro campos **aditivos**: `CommandResponse.noteCode`, `LogState.cantWhyCode`, `BootAnomaly.cause` y `LogCapture.noteCodes`. `go build`, `vet`, `test` y `gofmt` limpios.
+
+**El cambio de API no rompe nada y los deploys no tienen que ir juntos.** Los campos de prosa se quedan y se siguen poblando: la regla en todos lados es *traducir por código, con fallback a la prosa que mandó el emisor*. Frontend nuevo + backend viejo degrada a inglés; backend nuevo + frontend viejo sigue leyendo `note`. Misma degradación en la que ya se apoyan el `VersionBadge` y el guard `supported` del panel de logs.
+
+### 🐞 Bug preexistente encontrado y arreglado: el reloj de 12 h
+
+Pedirle a `Intl` **`es-AR` con `hour: '2-digit'` resuelve a `hourCycle: 'h12'` en Chrome**, así que las 19:00 UTC salían como **"04:00 p. m."** en todos los ejes, tooltips y relojes de la app — dashboard, calendario, panel de batería y el reloj del service view. Argentina escribe 16:00, y también lo hacen los ISO del backend, InfluxDB y el visor de payloads al lado.
+
+No lo introdujo esta tanda —el código original hacía la misma llamada— pero contradecía lo que el badge ART promete. Arreglado con `hourCycle: 'h23'` en `utils/timezone.js` (no `hour12: false`, que en algunos motores da el ciclo h24 y renderiza la medianoche como 24:00). **Verificado en Chrome contra el backend de la Pi**: los ejes pasaron de `01:00 a. m. … 04:00 p. m.` a `01:00 … 16:00`.
+
+Dos hallazgos menores del mismo barrido: los charts de temperatura y humedad no tenían `name`, así que el tooltip caía al `dataKey` y mostraba `temperature` crudo (ni inglés ni español); y se fue el `.toFixed(1).replace('.', ',')` hecho a mano de `CalendarView`, absorbido por el formateador compartido.
+
+### Pendientes, en orden
+
+1. **Verificar service mode en Chrome, los dos idiomas**, contra la Pi con `VITE_API_PROXY=http://192.168.18.250 npm run dev`. La Fase 1 ya se verificó así; falta la vista de service mode. **Foco especial en el desborde de los tooltips CSS** (`content: attr(data-tip)`, `index.css:717`): el español es ~20% más largo.
+2. **Probar el fallback**: apuntar el frontend nuevo a la Pi *antes* de desplegar el backend `1.4.0`. Las notas tienen que salir en inglés sin romper nada — es la prueba de que el cambio es aditivo de verdad.
+3. **Bump del frontend a `1.5.0`.** Deliberadamente **no** se bumpeó todavía: la regla del `CLAUDE.md` es que bumpear es el último paso *antes de rebuildear*, y no se rebuildeó nada. **Si mañana se despliega, esto sube primero.**
+4. **Fase 3 — revisión general.** `/code-review high` sobre el diff acumulado de cada repo y `/simplify`. Lo específico de una migración de i18n que el review genérico no busca: índices de `<Trans>` mal numerados (fallan en silencio), concatenación disfrazada de interpolación, claves definidas sin usar, y concordancia de género en español.
+
+### Deuda anotada de paso, no resuelta
+
+- **El ciclo se cita como 60, 64 y 70 s en distintos lugares.** `LogPanel.jsx:71` define `CYCLE_SEC = 64`; varios textos decían "duerme 60 s de cada 70". Desde el firmware `1.18.0` el nodo reporta `next_s` y el backend calcula el intervalo real, así que ese número quedó atrás. **Los textos de UI ya se corrigieron** en el diccionario (dicen "casi todo el ciclo", sin número), pero **`CYCLE_SEC` sigue hardcodeado** y la constante de `logs.go:224` también.
+- **Seis archivos `.go` no pasan `gofmt`**: `api/handlers/history.go`, `database/influx.go`, `database/influx_history.go`, `models/weather.go`, `services/history/service.go`, `services/weather/service.go`. Preexistentes y fuera del diff de esta tanda.
+- El default hardcodeado de `--pass` en `tools/brokerprobe/main.go` sigue abierto (ver más abajo).
 
 ## ✅ Live mode — implementado y validado en campo (2026-08-08/09)
 
