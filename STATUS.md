@@ -2,7 +2,58 @@
 
 > Actualizar este archivo al final de cada sesión de trabajo relevante. Es el punto de partida para la siguiente conversación — ver política en [`CLAUDE.md`](./CLAUDE.md).
 
-_Última actualización: 2026-08-10_
+_Última actualización: 2026-08-11_
+
+## ✅ i18n EN/ES — terminado y revisado, listo para desplegar (2026-08-11)
+
+**El trabajo está cerrado.** Frontend `1.5.0` y backend `1.4.1`, los dos pusheados, con la revisión de calidad aplicada.
+
+> ⚠️ **Sigue sin desplegar.** La Pi corre backend `1.3.2` y frontend `1.3.0`. Lo único que queda es rebuildear las dos imágenes y levantarlas.
+
+**Los dos deploys no tienen que ir juntos, y está verificado contra la Pi real.** El backend viejo no manda `cantWhyCode` ni `cause` → el frontend cae a la prosa inglesa. Pero sí manda `tier` y `flashRisk`, que siempre existieron → esos traducen igual. O sea: **el frontend se puede desplegar solo** y traduce casi todo; las notas que redacta el backend se vuelven español cuando suba el `1.4.1`.
+
+### Lo verificado en campo (Chrome contra la Pi)
+
+Ambos idiomas en dashboard, calendario y service mode. Los `<Trans>` con markup embebido, los sensores, los códigos del backend, el reloj de 24 h. Y el toggle **sin recargar**: `hace 59 min` → `59 min ago`, mismo DOM — que era la única afirmación que había hecho sin probar.
+
+### Cinco bugs encontrados y arreglados
+
+1. **Reloj de 12 h en toda la app** (preexistente). `es-AR` con `hour: '2-digit'` resuelve a `hourCycle: 'h12'` en Chrome: las 19:00 UTC salían como `"04:00 p. m."`. Arreglado con `hourCycle: 'h23'`.
+2. **Decimales que ignoraban el locale.** `toFixed()` siempre emite punto — la tarjeta decía `3.992 V` y la línea de umbral del mismo gráfico `3,85V`. Ahora hay `formatFixed`.
+3. **El filtro de logs buscaba sobre el inglés del nodo** mientras la fila mostraba la traducción. Introducido en esta tanda.
+4. **El diccionario `LOG_*` podía pisar al firmware con una leyenda vieja.** Ahora la traducción sólo vale para el template contra el que fue escrita, comparando contra el diccionario que viaja en cada captura.
+5. **Tooltips del calendario** con el número crudo.
+
+### La revisión de calidad
+
+`/code-review high` más cuatro pasadas (reuse, simplificación, eficiencia, altitud). Lo que sobrevivió al filtro:
+
+- **Los formateadores `Intl` se construían por llamada** — medido: ~60 µs contra ~2 µs cacheado. En las listas del service view, que re-renderizan enteras a ~1 Hz por el SSE, eran **30-46 ms por frame**. Cacheados.
+- **`live.exitReason` y `health.lastSeenSource` estaban en el namespace equivocado** (marcado por dos agentes): son códigos externos, van en `api`, que es el exento del warning de clave faltante.
+- **`ServiceApi.js` era la segunda casa del formateo** — `formatAge`/`formatElapsed`/`formatDuration` se mudaron a `utils/timezone.js` y se fue el shim de `formatClock`.
+- Menores: `commandToast()`, colapso de un memo, `ENV_KEY` derivado, oraciones enteras en vez de sufijo compartido, plurales donde el conteo puede ser 1.
+
+**Chequeos mecánicos**: 419 claves por idioma, **0 desajustes** de paridad/markup/placeholders, **0 claves muertas**, y las 14 plantillas `LOG_*` idénticas al `logging.h` del firmware.
+
+### Deuda anotada, no resuelta
+
+- **`CYCLE_SEC = 64` sigue hardcodeado** en `LogPanel.jsx:52`. Los textos de UI ya se corrigieron (dicen "casi todo el ciclo", sin número), pero la constante no usa el `next_s` que el nodo reporta desde el `1.18.0`.
+- **Seis archivos `.go` no pasan `gofmt`** (`api/handlers/history.go`, `database/influx.go`, `database/influx_history.go`, `models/weather.go`, `services/{history,weather}/service.go`). Preexistentes, fuera del diff.
+- **`utils/timezone.js` ya no es sólo timezone** — tiene todo el formateo. El nombre quedó chico; renombrarlo a `format.js` toca ~14 imports.
+- El default hardcodeado de `--pass` en `tools/brokerprobe/main.go` sigue abierto (ver más abajo).
+
+<details>
+<summary>Las cuatro decisiones de arquitectura, para no re-derivarlas</summary>
+
+| | decisión | por qué |
+|---|---|---|
+| Librería | **react-i18next** | Por `<Trans>`. Buena parte de la prosa lleva markup en medio de la oración; sin él hay que partir cada frase en fragmentos y el traductor nunca ve la oración entera. |
+| Formato regional | **Fijo en `es-AR` / ART, en los dos idiomas** | La estación está en Argentina y el backend corta sus días en medianoche local: son propiedades del dato, no preferencia del lector. |
+| Texto del backend | **Backend manda códigos, frontend escribe** | Extiende el patrón que ya usaban `RISK_UI`, `NODE_STATE_UI`, `EXIT_REASON`. Aditivo: la prosa queda como fallback. |
+| Firmware | **Queda afuera** | `_dictFingerprint()` hashea los templates de `LOG_CODES`: editarlos resetea el ring de logs en RTC. |
+
+El detalle operativo vive ahora en la sección **Idioma (i18n)** del `CLAUDE.md` del frontend.
+</details>
 
 ## 🚧 i18n EN/ES — código completo y pusheado, falta verificar y desplegar (2026-08-10)
 
