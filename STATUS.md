@@ -2,13 +2,104 @@
 
 > Actualizar este archivo al final de cada sesión de trabajo relevante. Es el punto de partida para la siguiente conversación — ver política en [`CLAUDE.md`](./CLAUDE.md).
 
-_Última actualización: 2026-08-11_
+_Última actualización: 2026-08-12_
 
-## ✅ i18n EN/ES — terminado y revisado, listo para desplegar (2026-08-11)
+## ✅ El indicador de SoC dejó de estar nervioso — código listo, SIN desplegar (2026-08-12)
+
+**Backend `ddfcd91` y frontend `fe43132`, commiteados y pusheados.** Mau reportó que el indicador de estado energético conmutaba sin parar entre *Cargando* y *Batería llena* desde que se activó el auto-armado de live mode.
+
+> ⚠️ **Sin desplegar y sin bumpear.** La Pi corre frontend `1.5.0` y backend `1.4.2`. **Los dos repos tienen que bumpear antes de rebuildear** (backend `1.4.2` → `1.5.0`, frontend `1.5.1` → `1.6.0`): el cambio agrega un valor nuevo a la API y cambia la semántica del SoC. Se dejó sin bumpear siguiendo la regla del `CLAUDE.md` — bumpear es el último paso *antes* de rebuildear.
+
+### El diagnóstico: live mode no lo causó, le sacó el aliasing
+
+No era una regresión. Es el problema que este mismo documento ya describía en *"El charger cicla, y el backend está aliasando ese cicleo"* (08-09), con la propuesta esbozada y sin implementar. Tres valores salían de comparaciones **instantáneas** contra un proceso que **cicla**: `energyState` (`solar_v >= 12,5`), el SoC (`socCurve` de la última muestra) y el flag `charging` (`solar_mA >= 20`).
+
+Con el pack lleno `solar_v` oscila entre ~11,5 V (Vmp bajo carga) y ~14,2 V (circuito abierto), **con el umbral de 12,5 V justo en el medio del swing**. Antes llegaba una telemetría cada 60 s y se veía una fase por ciclo; con live mode llega cada 5 s y se ve cada cruce.
+
+**Cuantificado sobre 8 días de InfluxDB (08-05 → 08-12, 20.601 muestras)** — transiciones `charging`↔`full` por hora de luz:
+
+| 08-05 | 08-06 | 08-07 | 08-08 | 08-09 | **08-10** | **08-11** | **08-12** |
+|---|---|---|---|---|---|---|---|
+| 7,4 | 10,8 | 9,2 | 15,2 | 12,0 | **40,3** | **134,6** | **136,9** |
+
+El flag `charging` estaba peor: 125–176/h contra 2,7–19,1. Y el swing intradiario del SoC iba de **16,6 a 34,3 puntos** — confirma y supera los "~25 puntos" que ya estaban anotados.
+
+### La solución: una ventana compartida con latch histerético
+
+**`live.go` ya tenía el mecanismo correcto** (`surplusSustained`, corriendo en campo desde el 08-09 para auto-armar). Ahora está generalizado y **compartido**: una sola definición de excedente, y el dashboard y el armado no pueden contradecirse.
+
+```
+entrada:  circuito abierto en la ventana (15 min)  Y  máx(system_v) >= 4,05 V
+salida:   se acaba la luz → discharging   |   máx(system_v) < 4,05 V → charging
+guard:    < 7 muestras en la ventana → no opinar
+```
+
+**Entrada y salida testean cosas distintas a propósito.** Al atardecer el panel también flota a circuito abierto, pero **por debilidad, no por excedente** — el guard del pack es lo que los distingue. Y la salida sólo mira el pack, así que un hueco entre ciclos de carga (hasta 8,4 min medidos) no tumba el estado.
+
+**Por qué el máximo y no la mediana**: toda desviación del reposo es hacia abajo (radio arriba, y live mode suma 53 mA continuos), así que el máximo de la ventana es la mejor estimación de reposo disponible. Separación medida:
+
+| grupo | p01 | p05 | p50 |
+|---|---|---|---|
+| pack lleno (circuito abierto en ventana) | 4,056 | 4,112 | 4,208 |
+| cargando de verdad | 3,952 | 3,960 | 4,020 |
+
+**4,05 V** retiene 99,2% de las muestras de pack lleno y rechaza 87,5% de las de carga. Es además **el valor más bajo donde el guard de entrada hace algo**: a 4,00 no hubo ni una muestra en 8 días con circuito abierto y el pack por debajo. El resultado es **insensible al número exacto** entre 3,95 y 4,10; recién a 4,15 empieza a romper el latch.
+
+### Resultado, validado replayando la serie real por el código Go
+
+**3.161 → 15 transiciones sobre los 8 días. Ninguna racha por debajo de 2 minutos** (contra rachas de segundos antes). La mañana sigue clasificando como `charging` los ~170 min que la carga real tarda.
+
+- **SoC**: un pack lleno queda en 100% el **78% de las muestras** y nunca baja de 91%, contra el ~75% que marcaba en fase de corte con la celda recién terminada en 4,2 V.
+- **`Tier` acompaña al SoC** (no estaba en el plan original): comparten línea en la UI y con la muestra cruda esa línea se contradecía sola — `100% · Tier 2`, porque el pack lee ~4,02 V de día contra un piso de 4,10.
+- **`FlashRisk` NO se movió, a propósito.** Su pesimismo por sag es el margen que decide si un OTA puede brownoutear el nodo.
+
+### Decisión: `surplus` reemplaza a `full`, no se suma
+
+Mau había elegido "sexto estado propio". **Medirlo lo descartó**: un `full` con el sentido "lleno pero sin excedente ahora" ocupa **0-11% del día en rachas de mediana 5,2 min y mínimo 1,1 min**, y sube las transiciones de 14 a 37. El sexto estado *era* el parpadeo, renombrado. El enum queda en cinco: `charging` · `surplus` · `discharging` · `deficit` · `unknown`.
+
+**El estado se dispara por excedente, independiente del modo** — vale igual en ciclo normal (el charger descarta) que en sesión live (el nodo lo gasta). Live mode es *consecuencia* de este estado, que es exactamente cómo lo arma `evaluateLiveAuto`.
+
+### Bug arreglado de paso
+
+**El registro de la ventana colgaba del gate de `LIVE_AUTO_ENABLED`** (`live.go`, el `return` temprano de `evaluateLiveAuto`): con el auto-armado apagado la ventana quedaba vacía. Ahora se registra siempre, porque alimenta al dashboard además del armado.
+
+### 🔎 Hallazgo sin explicar, anotado
+
+**La mediana de `solar_mA` de día en los días con live es 6,6–7,8 mA, contra 23,8–190,5 mA en los días sin live.** O sea que durante live mode el INA solar mide *menos* corriente, no más. Puede ser confundidor meteorológico (el 08-12 tuvo p95 = 96,8 mA contra 173–229 de los otros días, o sea más nublado) o que a 5 s se vea el estado entre ráfagas que el muestreo de 60 s no capturaba. **No está explicado, y vale investigarlo aparte** — es la razón por la que la etiqueta dice "excedente solar" y no afirma que el panel esté alimentando el sistema en directo.
+
+### Pendientes
+
+1. **Bumpear los dos repos y desplegar** (ver el aviso de arriba).
+2. **Verificar en Chrome contra la Pi** durante una sesión live: la tarjeta no tiene que conmutar.
+3. **Cambio del INA219 a mediciones múltiples** — decisión de Mau: backend primero, firmware después. Es complementario, no redundante: el promediado ataca ruido de muestra en escala de ms y el cicleo del charger es de 1–10 min. Como esta lógica se apoya en *detección de eventos sobre ventana* y no en suavizado, el cambio de firmware la mejora sin obligar a recalibrar nada.
+
+   ⚠️ **Mina para cuando se haga**: N8N escribe `${p.solar_mW}i` y `${p.system_mW}i` como enteros, y funciona **por casualidad** porque `powerMultiplier = 2` hace que la potencia siempre sea múltiplo entero (ver la sección de N8N más abajo). Promediar **por software** emite fraccionarios → `256.4i` es Line Protocol inválido y **InfluxDB rechaza el write**. Promediar **por hardware** (registro de configuración del INA219, hasta 128 muestras) mantendría el múltiplo entero — a confirmar contra la llamada de calibración actual, porque el `Adafruit_INA219` no expone un setter público para esos bits.
+
+## 🔎 Live mode auto-armado activo desde el 08-10 — indicio de que reduce el cicleo del charger, a confirmar (2026-08-11)
+
+**`LIVE_AUTO_ENABLED` está en `true` desde el 2026-08-10, activado a mano por Mau.** No quedó anotado en su momento — el mismo patrón de siempre, el estado de campo adelantado a los docs (ver `weather-station-station-iot/aprendizajes_y_roadmap.md` si hace falta el precedente). Se destapó analizando InfluxDB directo porque Mau notaba menos caída de voltaje nocturno en los gráficos y no cerraba con nada documentado. El pendiente que decía "sin estrenar" en la sección de Live mode más abajo queda superado.
+
+**Medido en InfluxDB** (`live_seq`, ventana 12–20 UTC): 5,4 h corridas el 08-10 (15:24–20:49 UTC) y >7 h el 08-11 (13:46–20:51 UTC, todavía corriendo al momento de escribir esto). Ambas sesiones son diurnas — ninguna toca la ventana nocturna (21:00–09:30 local), confirmado sobre 40 noches sin un solo punto `live_seq` fuera de horario diurno.
+
+### El hallazgo: no es que la noche drene menos, es que el charger deja de cicletear
+
+La hipótesis inicial de Mau —"el nodo consume menos de noche por live mode"— no cerraba: live mode nunca corre de noche, y la caída nocturna "de verdad" (desde las 21 h, cuando el drama del día ya se asentó, hasta el mínimo de madrugada) sigue en la misma banda de siempre (35–80 mV) en las 40 noches revisadas, sin quiebre limpio en la fecha de los fixes de consumo del 29-jul. Comparando dos noches con voltaje de arranque similar (una de antes de esos fixes, una de ahora), la reciente cae *más*, no menos — consistente con que agosto está bastante más frío que julio (noches bajo cero contra los 4–11 °C de mediados de julio), y ese efecto tapa cualquier ahorro de mAh.
+
+Lo que sí cambió, y coincide en fecha con el auto-armado: **el % del mediodía que el sistema pasa en la zona de cicleo del charger** (`system_v > 4,15 V`, la firma de CV/corte del CN3791 documentada en "El charger cicla", más abajo) cae de 17–61% en los días previos (05 al 09-08) a 9–18% el 08-10/08-11 — con la cuenta de muestras `live_seq` esos días coincidiendo casi 1:1 con el total de telemetría del mediodía, es decir, casi todo el mediodía quedó cubierto por una sesión de live. Con una carga real absorbiendo el excedente, el charger deja de cortar y volver a cargar tan seguido.
+
+**El dato más fuerte, con una sola noche todavía**: el mínimo nocturno *crudo* (sin promediar en ventanas) de la noche 08-10→11 fue **3,936 V**, contra una banda muy angosta de **3,876–3,900 V** en las seis noches previas (08-04 a 08-09). Un salto de ~40–60 mV, limpio, fuera de esa banda. Y no se explica por un día más soleado: `solar_mA` promedio del mediodía fue **42 mA el 08-10** contra **100–141 mA** en los días soleados previos (08-06, 08-07, 08-09) — el 08-10 fue *más nublado*, no menos, lo que hace el resultado más interesante: con menos sol disponible, la batería terminó la noche mejor que en días de sol pleno con mucho cicleo.
+
+**Hipótesis de mecanismo, no confirmada todavía**: un CV/corte interrumpido cada pocos minutos (el patrón de "El charger cicla") puede no dejar completar nunca la cola de absorción que satura de verdad la celda — cada corte relaja el voltaje hacia abajo antes de que el próximo pulso de carga la lleve de nuevo arriba, sin que el pack llegue a un reposo verdadero. Con live mode absorbiendo el excedente en vez de dejar que el charger corte, la carga de esa franja podría ser más completa aunque el total de energía solar del día haya sido menor.
+
+**Método que vale la pena anotar**: la comparación con promedios de 20 min (la que se usa para el resto de este documento) no mostraba nada — fue recién con el mínimo *crudo*, sin agregar, que apareció el salto de 40–60 mV. Los promedios de ventana pueden estar enmascarando efectos reales de este tamaño.
+
+**No está confirmado.** Es una sola noche desde que se activó el auto-armado, y no se puede descartar que sea casualidad de esa noche puntual. **Pendiente**: repetir este mismo chequeo (mínimo nocturno crudo vs. la banda 3,876–3,900 V) después de unas noches más, con distintos niveles de sol, antes de tratarlo como una mejora real y medible.
+
+## ✅ i18n EN/ES — terminado, revisado y DESPLEGADO (2026-08-11, deploy confirmado el 08-12)
 
 **El trabajo está cerrado.** Frontend `1.5.0` y backend `1.4.1`, los dos pusheados, con la revisión de calidad aplicada.
 
-> ⚠️ **Sigue sin desplegar.** La Pi corre backend `1.3.2` y frontend `1.3.0`. Lo único que queda es rebuildear las dos imágenes y levantarlas.
+> ✅ **Desplegado.** La Pi corre **frontend `1.5.0` y backend `1.4.2`** (el `1.4.2` incluye un cambio chico posterior al cierre de esta sección). Confirmado por Mau el 2026-08-12 — el deploy se había hecho sin anotarlo, y esta nota decía "sigue sin desplegar" hasta entonces.
 
 **Los dos deploys no tienen que ir juntos, y está verificado contra la Pi real.** El backend viejo no manda `cantWhyCode` ni `cause` → el frontend cae a la prosa inglesa. Pero sí manda `tier` y `flashRisk`, que siempre existieron → esos traducen igual. O sea: **el frontend se puede desplegar solo** y traduce casi todo; las notas que redacta el backend se vuelven español cuando suba el `1.4.1`.
 
@@ -225,7 +316,7 @@ Lo que sí escala mal es escanear millones de puntos de 5 s para un gráfico de 
 
 ### Pendientes
 
-- **Auto-armado sin estrenar**: `LIVE_AUTO_ENABLED` sigue en `false`. La lógica nunca corrió contra un día real con excedente.
+- ~~Auto-armado sin estrenar: `LIVE_AUTO_ENABLED` sigue en `false`~~ → **activado a mano el 2026-08-10.** Ver sección "Live mode auto-armado" al principio del documento.
 - **Los umbrales de luminosidad (65%/45%) son de primera pasada**, con los anclajes medidos escritos al lado en `models/service.go` para afinarlos con datos.
 
 ## ⚠️ El mapeo de campos de N8N descarta en silencio lo que no conoce (2026-08-09)
