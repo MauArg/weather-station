@@ -4,11 +4,32 @@
 
 _Última actualización: 2026-08-12_
 
-## ✅ El indicador de SoC dejó de estar nervioso — código listo, SIN desplegar (2026-08-12)
+## ✅ El indicador de SoC dejó de estar nervioso — DESPLEGADO (2026-08-12)
 
 **Backend `ddfcd91` y frontend `fe43132`, commiteados y pusheados.** Mau reportó que el indicador de estado energético conmutaba sin parar entre *Cargando* y *Batería llena* desde que se activó el auto-armado de live mode.
 
-> ⚠️ **Sin desplegar y sin bumpear.** La Pi corre frontend `1.5.0` y backend `1.4.2`. **Los dos repos tienen que bumpear antes de rebuildear** (backend `1.4.2` → `1.5.0`, frontend `1.5.1` → `1.6.0`): el cambio agrega un valor nuevo a la API y cambia la semántica del SoC. Se dejó sin bumpear siguiendo la regla del `CLAUDE.md` — bumpear es el último paso *antes* de rebuildear.
+> ✅ **Desplegado.** La Pi corre **frontend `1.6.0` y backend `1.5.0`**, confirmado por Mau y verificado en Chrome contra la Pi el 2026-08-12: se ve el estado nuevo `Midiendo…` ("Hace falta alrededor de una hora de datos para determinar la tendencia") mientras la ventana de histéresis todavía no tiene las 7 muestras del guard.
+
+### Bug de UI encontrado y arreglado de paso, en la misma tanda de deploy (frontend, sesión aparte)
+
+**Eje derecho (temperatura) del gráfico "Clima: luz diurna vs. retardo térmico" con decimales sucios** — `Dashboard.jsx`, ticks tipo `-3.787999999994°C` / `11.212°C` / `26.212°C` en vez de números redondos, y con punto en vez de coma. Causa: `domain={[0, 40]}` fijo sin `ticks` explícitos; cuando la temperatura real baja de 0° (pasa seguido en invierno), recharts extiende el dominio efectivo al mínimo crudo del dato — un float de un promedio de sensor, no un número redondo — y ese float se arrastra a cada tick generado (confirmado reproduciendo `getTickValuesFixedDomain` de recharts fuera de React). Arreglado fijando `ticks={[0, 10, 20, 30, 40]}`, igual que ya hacía el eje de humedad al lado (`c4dbe12`, frontend `1.5.1`, absorbido en el `1.6.0` de este deploy). Verificado en dev contra la Pi real y de nuevo ya en producción: la línea sigue dibujándose por debajo de 0° sin cortarse, sólo cambiaron las etiquetas.
+
+### Verificado en Chrome contra el nodo real (2026-08-12, de noche)
+
+Backend nuevo corriendo local contra el broker y el InfluxDB **de producción**, con `MQTT_CLIENT_ID=weather-station-backend-localtest` — **pisar el client ID es obligatorio**: con el default, Mosquitto patea al backend de la Pi y los dos quedan en un loop de reconexión. Verificado que el de producción siguió conectado durante toda la prueba.
+
+**De noche no se puede ver el escenario del cicleo** (no hay sol), pero sí se pudo medir el jitter del SoC, que existe igual porque `system_v` tiene dips de sag. A las **01:21:53 el nodo reportó 3,940 V**:
+
+| | SoC |
+|---|---|
+| lógica vieja (última muestra) | **70,4%** |
+| lógica nueva (máx. de ventana) | **81,6%** |
+
+**11,2 puntos de salto evitados en una sola muestra.** Con la ventana llena el número quedó fijo en 81,6% durante 10 minutos mientras el crudo paseaba entre 3,940 y 4,016 V.
+
+Lo demás verificado: el estado `surplus` renderizado en los dos idiomas —"Battery full · Solar surplus" y "Batería llena · Excedente solar"— **sin desbordar ni cortar línea**, forzando la respuesta de la API desde el browser; los tooltips reescritos de `socTip` y `panelTip`; el toggle EN/ES; el reloj de 24 h; y cero warnings de clave faltante en consola.
+
+**Queda sin ver en vivo hasta que haya sol**: el estado `surplus` disparado por condiciones reales y la ausencia de parpadeo en campo. La evidencia que lo respalda es el replay de los 8 días reales por el código Go (3.161 → 15 transiciones).
 
 ### El diagnóstico: live mode no lo causó, le sacó el aliasing
 
@@ -69,8 +90,8 @@ Mau había elegido "sexto estado propio". **Medirlo lo descartó**: un `full` co
 
 ### Pendientes
 
-1. **Bumpear los dos repos y desplegar** (ver el aviso de arriba).
-2. **Verificar en Chrome contra la Pi** durante una sesión live: la tarjeta no tiene que conmutar.
+1. ~~Rebuildear las dos imágenes y desplegar.~~ → **hecho, ver nota de deploy arriba.**
+2. **Mirar la tarjeta un rato con sol**, que es lo único que la prueba nocturna no pudo cubrir.
 3. **Cambio del INA219 a mediciones múltiples** — decisión de Mau: backend primero, firmware después. Es complementario, no redundante: el promediado ataca ruido de muestra en escala de ms y el cicleo del charger es de 1–10 min. Como esta lógica se apoya en *detección de eventos sobre ventana* y no en suavizado, el cambio de firmware la mejora sin obligar a recalibrar nada.
 
    ⚠️ **Mina para cuando se haga**: N8N escribe `${p.solar_mW}i` y `${p.system_mW}i` como enteros, y funciona **por casualidad** porque `powerMultiplier = 2` hace que la potencia siempre sea múltiplo entero (ver la sección de N8N más abajo). Promediar **por software** emite fraccionarios → `256.4i` es Line Protocol inválido y **InfluxDB rechaza el write**. Promediar **por hardware** (registro de configuración del INA219, hasta 128 muestras) mantendría el múltiplo entero — a confirmar contra la llamada de calibración actual, porque el `Adafruit_INA219` no expone un setter público para esos bits.
