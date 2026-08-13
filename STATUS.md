@@ -2,7 +2,45 @@
 
 > Actualizar este archivo al final de cada sesión de trabajo relevante. Es el punto de partida para la siguiente conversación — ver política en [`CLAUDE.md`](./CLAUDE.md).
 
-_Última actualización: 2026-08-12_
+_Última actualización: 2026-08-13_
+
+## 🔬 Power management: procedimiento de reposo listo, y el plan del INA219 corregido (2026-08-13)
+
+**Sesión de análisis, sin cambios de firmware.** Todo commiteado y pusheado en `station-iot` (`6312f42`). **Nada flasheado, nada desplegado** — el estado de campo no cambió.
+
+### La fila quedó ordenada, con tres cosas en ella
+
+Mau retomó el pendiente de "que el INA219 promedie varias muestras en vez de tomar una puntual". Leyendo el código aparecieron correcciones al diseño en papel, y la sesión del indicador de SoC había agregado un orden propio. La fila consolidada:
+
+| | qué | estado |
+|---|---|---|
+| 1 | **Medir el reposo con multímetro** | 📄 procedimiento listo, **sin ejecutar** |
+| 2 | Promediado por hardware del INA219 (sólo firmware) | planificado |
+| 3 | Integración de la ventana activa (`active_mAs` + `awake_ms`) | planificado |
+
+El backend de la ventana compartida (pendiente 3 de la sección de abajo) **ya está hecho y desplegado** — es complementario, no compite.
+
+### 📄 `weather-station-station-iot/medicion_consumo_reposo.md`
+
+El reposo son **77,7 mAh/día, el 63% del presupuesto, y nunca se midió**: se dedujo restando la ventana activa del total estimado por caída nocturna. Procedimiento de banco listo para ejecutar con multímetro de mano, **decidido con Mau: se mide antes de tocar firmware.**
+
+Dos decisiones que lo hacen viable, y que **invierten el orden que proponía el roadmap**:
+
+- **Empezar por las mediciones sin ráfagas de WiFi.** La SuperMini está sobre headers hembra, así que se desenchufa sin desoldar; con el ESP32 afuera la corriente es DC estable y aísla al sospechoso principal (el boost) sin cronometrar nada. El plan viejo empezaba por el total, que es la difícil.
+- **Un puente de cocodrilos sobre las puntas** para la medición con el nodo vivo. El burden voltage de un multímetro de mano (~10 Ω) son volts durante la ráfaga de asociación: el nodo brownoutea y la lectura no vale nada. El dashboard hace de reloj — hay ~57 s de ventana tranquila por ciclo.
+
+**La predicción falsable: el nodo dormido tiene que dar ~3,2 mA.** Si sale muy distinto, lo que está mal es el método de la caída nocturna, no el hardware.
+
+**Punto abierto**: cómo intercalar en la línea de batería sin un pigtail JST PH 1.25. Se resuelve mirando la caja abierta.
+
+### Cinco correcciones al plan del INA219, verificadas contra el código
+
+Detalle completo en `aprendizajes_y_roadmap.md` → "Medir la energía de la ventana activa". Las dos que más cambian el diseño:
+
+1. **Hoy el INA219 está en power-down durante todo el burst de WiFi.** Nada lo despierta hasta `sensors_init()` (`main.cpp:110`), que corre *después* de WiFi + MQTT + espera del retenido. **La muestra no cae "aleatoriamente dentro o fuera del burst"** como decía el roadmap: cae sistemáticamente en la fase tranquila, sesgando bajo de forma consistente — que es peor que el ruido aleatorio, porque no se promedia solo. Cualquier versión de esto empieza por despertarlo arriba de `setup()`; cuesta ~1 mAh/día sobre 122.
+2. **La mina de N8N no se dispara con promediado por hardware** — cierra el *"a confirmar"* del pendiente 3 de abajo. El promedio ocurre dentro del ADC, antes de que el chip calcule el registro POWER, que sigue siendo entero; `getPower_mW()` lo multiplica por 2, así que `${p.system_mW}i` sigue siendo Line Protocol válido. **Sí aplicaría a un promedio por software**, o si se cambiara la calibración.
+
+Las otras tres: `powerSave()` preserva los bits de promediado pero `begin()` los destruye (el override va después de **cada** `begin()`); los nombres de constantes que figuraban como "sin confirmar" existen en el header instalado; y el "~33 promedios que cubren el 100% de la ventana" es optimista — en `SANDBVOLT_CONTINUOUS` los tiempos de shunt y bus se suman.
 
 ## ✅ El indicador de SoC dejó de estar nervioso — DESPLEGADO (2026-08-12)
 
