@@ -2,7 +2,56 @@
 
 > Actualizar este archivo al final de cada sesión de trabajo relevante. Es el punto de partida para la siguiente conversación — ver política en [`CLAUDE.md`](./CLAUDE.md).
 
-_Última actualización: 2026-08-13_
+_Última actualización: 2026-08-15_
+
+## ✅ Tanda de UI — 11 cambios, DESPLEGADA (2026-08-15)
+
+**La Pi corre frontend `1.7.0` y backend `1.5.0`.** Sólo frontend: ni backend ni firmware se tocaron, así que el estado de campo del nodo no cambió. Verificado en producción contra la Pi el 2026-08-15 — badge `ui 1.7.0 · api 1.5.0`, las seis etiquetas de rango, las dos secciones, los pies de tarjeta, ancho de página 1800 y cero desborde horizontal.
+
+> ⚠️ **Al verificar un deploy, forzar recarga sin caché.** La primera lectura mostró `ui 1.6.0` y ninguna marca de la tanda, con el deploy ya hecho. Era caché del browser: `curl` al `index.html` de la Pi ya devolvía el hash del bundle nuevo (`index-CaqBM_1I.js`, idéntico al build local) con `Last-Modified` de dos minutos antes. Comparar el hash servido contra `dist/assets/` distingue "no se desplegó" de "lo estás viendo viejo" sin adivinar.
+
+### 🐞 El hallazgo que más vale guardar: recharts 3 rompió el crosshair en silencio
+
+El dashboard tenía una línea horizontal de crosshair **escrita y sin dibujar**. `onMouseMove` de recharts 2 recibía `activePayload`; **en recharts 3 el handler recibe `MouseHandlerDataParam`, que no tiene ese campo** — no existe en ningún lado de los tipos de la 3.6. El guard `if (e.activePayload && …)` daba siempre falso, así que `activeTemp`/`activeHum`/`activeEnergy` nunca se seteaban y sus tres `ReferenceLine` nunca renderizaban.
+
+**No tira error, no rompe el build, no lo marca el lint.** Vale revisar el resto de la app por el mismo patrón si alguna vez se toca otro chart. La reimplementación es un overlay del DOM, deliberadamente fuera de la API de recharts para no volver a depender de ella.
+
+**La receta visual salió de leer la instancia de Grafana de la `.251`** (uPlot, `.u-cursor-x`): `rgba(120,120,130,0.5)` a `1/devicePixelRatio` px, dashed. Dos cosas explican por qué se ve sin molestar: es **gris neutro, no blanco** —el blanco a cualquier alpha compite con las series—, y el ancho es **exactamente un píxel físico**. Los dos ejes del crosshair comparten las constantes, porque SVG y CSS interpretan distinto la misma palabra: `stroke-dasharray` es independiente del grosor, `border-style: dashed` deriva el dash del grosor del borde.
+
+### 📊 7d y 14d: el costo está medido, y downsamplear más grueso NO lo arregla
+
+Los rangos nuevos **no necesitaron backend**: el handler acepta cualquier `hours` y la query de Flux ya agrega en ventanas de 15 min. Medido contra la Pi:
+
+| rango | puntos | payload | tiempo |
+|---|---|---|---|
+| 24h | 97 | 25 KB | 0,41 s |
+| 72h | 289 | 74 KB | 1,88 s |
+| **7d** | 673 | 174 KB | **3,73 s** |
+| **14d** | 1344 | 348 KB | **4,75 s** |
+
+**El tiempo escala con el barrido de InfluxDB sobre los puntos crudos, no con el tamaño de la respuesta.** Una ventana de agregación más grande achicaría el payload y dejaría la query igual. Si algún día molesta, la respuesta es un **bucket downsampleado por una task de Influx** — que es exactamente el disparador anotado en *"Volumen de InfluxDB con live mode"* más abajo. Hoy no hace falta.
+
+Esa espera es la que obligó a separar el estado de carga: el `isLoading` gateaba **el dashboard entero**, invisible mientras todo contestaba en menos de un segundo, y a 14 d borraba tarjetas y estado energético —que no dependen del rango— por cinco segundos.
+
+### 🐞 Desborde horizontal en mobile, con dos causas independientes
+
+A 390px la página medía 439 y scrolleaba de costado. **No hay una sola regla `box-sizing` en el proyecto**, así que `#root` con `width: 100%` más `padding: 2rem` medía siempre 64px de más. Y la navbar no tenía media query: sus dos hijos piden 238 (logo) + 113 (acciones) sobre 311 disponibles.
+
+Se declaró `border-box` **sólo en `#root`**, no global — un reset le cambiaría la caja a cada elemento con padding de la app, y este `index.css` tiene muchos. Verificado sin desborde de 360 a 2000 px.
+
+**La página pasó de 1344 a 1800 de ancho máximo**, decidido con Mau: un tablero de gráficos no es prosa, y 1280 de contenido gastaba la mitad de una pantalla de 2560. Los gráficos anchos ganaron 37%. La única prosa, la frase del estado energético, se capea sola.
+
+### Lo demás, en una línea cada uno
+
+- Los dos gráficos anchos arrastraban las canaletas de desktop dentro de una tarjeta de teléfono: el área de ploteo del de retardo térmico era **125px contra 255** de los de arriba.
+- **"Datos en vivo" pasó a encabezar las tarjetas**, que es lo que describe, y los gráficos son **"Tendencias"**. Los títulos de temperatura y humedad dejaron de prometer "tiempo real", que con 14 d en el selector era falso.
+- **Máx./mín. del día se mudaron al pie de la tarjeta** de la magnitud que califican, alineados a la derecha. Estaban al fondo de la página, en el punto más lejano posible del número que califican.
+
+### Pendientes que dejó la tanda
+
+1. **Máx./mín. de presión.** El API ya los manda, pero se toman sobre `pressure_hpa` (lectura cruda, ~926) y la tarjeta muestra QNH (~1016): 90 hPa de diferencia se leería como tarjeta rota. **Reescalar por el offset actual sería adivinar** — se mueve con la temperatura a lo largo del día, lo suficiente contra un rango diario de 6 hPa, y los horarios de los extremos de las dos series no tienen por qué coincidir. El arreglo es que `GetDailyRaw` incluya `pressure_qnh`, campo que InfluxDB ya tiene y el backend ya lee para el valor actual. **Decisión de Mau: no es grave, se ve en otro momento.**
+2. **Tooltip pegado al salir scrolleando.** Si el mouse abandona un gráfico por scroll en vez de moviéndose, el tooltip de recharts queda mostrando un valor viejo. Preexistente; el crosshair nuevo sí se limpia bien.
+3. **Punto de rocío no tiene extremos** y no los va a tener por esta vía: es un valor derivado y el backend no los calcula.
 
 ## 🔬 Power management: procedimiento de reposo listo, y el plan del INA219 corregido (2026-08-13)
 
