@@ -4,6 +4,60 @@
 
 _Última actualización: 2026-08-15_
 
+## 🚀 Tendencia de temperatura — verificada, LISTA PARA DESPLEGAR (2026-08-15)
+
+**Backend `1.6.0` y frontend `1.8.0`, los dos commiteados, pusheados y bumpeados.** ⚠️ **Sin desplegar**: la Pi sigue en backend `1.5.0` y frontend `1.7.0`. Los dos son aditivos y **no tienen que ir juntos**.
+
+Mau tiene en Grafana un indicador que usa a diario y que el dashboard no tenía: si la temperatura viene subiendo, bajando o estable. Ahora vive en la línea del titular de la tarjeta de temperatura: `▼ Enfriando · 1,8 °C/h`.
+
+### El hallazgo que definió el diseño: la métrica de Grafana es una tasa disfrazada
+
+La query de Mau calcula `promedio 5 min − promedio 1 h` y muestra el resultado en °C. **Medido sobre 14 días de `temperature_c` leídos directo de InfluxDB: contra la tasa real da r = 0,935 con pendiente 0,396.** Es la tasa multiplicada por ~0,4, porque las dos ventanas se solapan y la resta se auto-amortigua.
+
+O sea que ese `°C` no es una temperatura utilizable — no es "hace 0,1° más que hace un rato". **Se reporta °C/h**, que es la misma información bien rotulada y el idioma que la app ya usa para la batería.
+
+### Los umbrales, medidos y no inventados
+
+| | valor | de dónde salió |
+|---|---|---|
+| `SteadyCPerH` | **1,0 °C/h** | El ±0,4 de Grafana ÷ 0,396 = ±1,01. Elegirlo desde la distribución llegó al mismo número por otro camino. |
+| `FastCPerH` | **3,0 °C/h** | El ±2,2 de Grafana son ±5,56 °C/h, donde la banda dispara 2% para calentamiento y **0% para enfriamiento**. |
+| `HysteresisCPerH` | **0,25 °C/h** | Sin ella, 29,4 cambios de banda por día. |
+
+**La asimetría del "rápido" es real, no artefacto**: la rampa de la mañana corre 2,4–3,1 °C/h de mediana a las 09–11h locales, mientras la caída de la tarde sólo llega a 1,7–1,8 a las 18–19h. A ±3,0 las cinco bandas reparten **6 / 20 / 54 / 13 / 7 por ciento**.
+
+**Y la noche es la que obliga a la histéresis**: de 00 a 08h la |tasa| mediana es 0,43–0,66 °C/h, apoyada contra el borde de estable. Con 0,25 los cambios bajan a 22,9/día y la racha mediana sube de 25 a 35 min. Es la misma mina que el SoC parpadeante del 08-12.
+
+### Arquitectura
+
+**Ring en memoria en el bridge, no una query.** `/weather/current` se pollea cada 3 s, así que consultar InfluxDB ahí sería caro. El estimador de `BatteryDriftVPerH` se generalizó a `driftPerHour` sobre `trendSample`: la misma mediana de tercios sirve V/h para el pack y °C/h para el aire.
+
+**Ventana de 1 h**, no las 2 del pack: el aire se mueve mucho más rápido y 2 h sólo atrasarían la lectura media hora.
+
+**El backend clasifica y manda el código; el frontend escribe.** Decisivo acá: la histéresis necesita estado entre polls y el frontend re-renderiza sin memoria cada 3 s.
+
+**Las bandas se cruzan de a una**, cada una con su margen. Testear sólo el borde más cercano dejaría una tasa que salta de estable a 3,1 °C/h reportada como estable, por quedar corta del borde de "rápido" mientras cruzaba el de "calentando" por lejos.
+
+> 🐞 **El primer test falló y el test tenía razón**: en los bordes exactos la clasificación no era simétrica. Recorriendo el array de umbrales con un solo operador, `-3,0 °C/h` caía en *Enfriando* mientras `+3,0` caía en *Calentando rápido*. `band()` quedó escrita explícita por signo.
+
+### Verificado end-to-end contra el nodo real
+
+- **`doc["temperature_c"]` en el firmware**, y el campo llegando al bridge en un payload en vivo. Era el riesgo principal: un nombre distinto habría dejado el ring vacío **sin fallar**.
+- **Arranque en frío**: `unknown` sin tasa, UI en "Midiendo…" / "Measuring…".
+- **El ring completó media ventana a los 32 min**, consistente con los 30 más el primer payload.
+- **La tasa cruzada por dos caminos independientes**: **-0,1068 °C/h** calculado desde InfluxDB (que alimenta N8N) contra **-0,1124** del ring en memoria (que alimenta MQTT). 0,0056 de diferencia, 5%.
+- Las cinco bandas por los dos idiomas, 10 de 10, y el layout a 390px sin truncar.
+- El backend de la Pi siguió conectado, con `MQTT_CLIENT_ID` pisado.
+
+### Pendiente de ver en campo
+
+**La histéresis cruzando un borde de verdad, y las bandas "rápido".** La noche de la prueba estuvo en 0,1 °C/h y ninguna de las dos cosas se puede provocar — hacen falta la rampa de la mañana y la caída de la tarde. Cubiertas por tests unitarios, no observadas.
+
+### Deuda anotada
+
+- **`internal/models/weather.go` salió de la lista de seis archivos que no pasaban `gofmt`.** Quedan cinco: `api/handlers/history.go`, `database/influx.go`, `database/influx_history.go`, `services/{history,weather}/service.go`.
+- El plan completo, con todo el análisis de umbrales, vive en `C:\Users\maulp\.claude-personal\plans\ethereal-doodling-lake.md`.
+
 ## ✅ Tanda de UI — 11 cambios, DESPLEGADA (2026-08-15)
 
 **La Pi corre frontend `1.7.0` y backend `1.5.0`.** Sólo frontend: ni backend ni firmware se tocaron, así que el estado de campo del nodo no cambió. Verificado en producción contra la Pi el 2026-08-15 — badge `ui 1.7.0 · api 1.5.0`, las seis etiquetas de rango, las dos secciones, los pies de tarjeta, ancho de página 1800 y cero desborde horizontal.
