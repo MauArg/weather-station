@@ -4,9 +4,11 @@
 
 _Última actualización: 2026-08-15_
 
-## 🚀 Tendencia de temperatura — verificada, LISTA PARA DESPLEGAR (2026-08-15)
+## ✅ Tendencia de temperatura — DESPLEGADA (2026-08-15)
 
-**Backend `1.6.0` y frontend `1.8.0`, los dos commiteados, pusheados y bumpeados.** ⚠️ **Sin desplegar**: la Pi sigue en backend `1.5.0` y frontend `1.7.0`. Los dos son aditivos y **no tienen que ir juntos**.
+**La Pi corre backend `1.6.0` y frontend `1.8.0`.** Confirmado el 2026-08-15 por tres vías: el endpoint de versión, el hash del bundle servido (`index-BHsBAyvK.js`, idéntico al build local) y la API ya devolviendo `tempTrend`.
+
+> Al verificar, el `tempTrend` recién desplegado sale **`unknown`** — el ring del bridge arranca vacío en cada reinicio y no opina hasta juntar media ventana, ~30 min. Es lo correcto, no un deploy a medias.
 
 Mau tiene en Grafana un indicador que usa a diario y que el dashboard no tenía: si la temperatura viene subiendo, bajando o estable. Ahora vive en la línea del titular de la tarjeta de temperatura: `▼ Enfriando · 1,8 °C/h`.
 
@@ -48,6 +50,14 @@ O sea que ese `°C` no es una temperatura utilizable — no es "hace 0,1° más 
 - **La tasa cruzada por dos caminos independientes**: **-0,1068 °C/h** calculado desde InfluxDB (que alimenta N8N) contra **-0,1124** del ring en memoria (que alimenta MQTT). 0,0056 de diferencia, 5%.
 - Las cinco bandas por los dos idiomas, 10 de 10, y el layout a 390px sin truncar.
 - El backend de la Pi siguió conectado, con `MQTT_CLIENT_ID` pisado.
+
+### La tasa lleva signo, y en una banda eso no es redundante
+
+`▲ Calentando rápido (+5,1 °C/h)`. La primera versión mostraba la tasa **sin signo** —la palabra y el chevron ya llevan la dirección— con un punto medio de separador. **Mau leyó ese punto como un signo menos**: a 0,8 rem `· 0,13` se ve igual que un `-0,13` mal renderizado, y tomado por signo *invierte* el sentido de las bandas de calentamiento.
+
+Al corregirlo apareció el argumento de fondo, que no era el separador: **dentro de la banda `steady` la palabra dice "Estable" y el ícono es una raya horizontal, así que ninguno de los dos lleva dirección.** `(+0,3 °C/h)` y `(-0,3 °C/h)` eran la misma lectura — una madrugada que se entibia contra una que se sigue enfriando. Ahí el signo es la única fuente de ese dato y se estaba tirando. En las otras cuatro bandas sí repite la palabra, que es la misma política que el dashboard ya aplica al color: nunca comunica solo.
+
+El signo sale de `signDisplay` de `Intl`, no de concatenar un `"+"`. `formatNumber` ganó la opción `sign`, con default `'auto'` — ninguna otra llamada de la app cambió.
 
 ### Pendiente de ver en campo
 
