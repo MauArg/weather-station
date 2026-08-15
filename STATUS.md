@@ -4,6 +4,38 @@
 
 _Última actualización: 2026-08-15_
 
+## 🚧 Extremos del día en vivo + tooltip de tendencia — frontend `1.9.0`, LISTO PARA DESPLEGAR (2026-08-15)
+
+Dos cosas que Mau reportó probando `1.8.0` en la Pi. Backend sin cambios, sigue en `1.6.0`.
+
+> Bundle a verificar tras el deploy: **`index-DXFhDInd.js`**. La técnica es comparar ese hash contra el que sirve la Pi — el browser cachea y el badge de versión llega a mentir, como pasó en el deploy de `1.7.0`.
+
+### 🐞 Los máx./mín. del día estaban congelados hasta recargar
+
+`getDailyStats()` sólo se llamaba en el efecto de carga —primer paint y cambio de rango—, nunca en el poll. En un dashboard dejado abierto los extremos quedaban clavados en lo que el día llevaba al abrir la pestaña. Se leía como bug justamente porque todo alrededor tickeaba.
+
+El arreglo tiene **dos partes, y una sola no alcanzaba**:
+
+1. **Refetch cada 60 s**, no cada 3 s como el resto. Ese endpoint no es gratis: el backend lo contesta escaneando *todos* los puntos crudos desde la medianoche local, sin agregar — **medido en 110 ms a media tarde**, y crece durante el día. A 3 s sería un escaneo de día entero en loop para una cifra que no puede moverse más rápido que la telemetría, que llega una vez por minuto.
+2. **El pliegue de la lectura viva** sobre el par, antes de dibujarlo. Sin esto el minuto se vería, y de la peor forma: entre que una lectura marca récord y la refetch lo confirma, la tarjeta mostraría `8,92 °C` arriba de `Máx. hoy 8,87 °C` — no una cifra vieja, una **imposible**, y justo en el pico del día que es cuando alguien mira.
+
+**Por qué el pliegue no es adivinar:** un extremo *es* la lectura más lejana del día, así que una lectura que lo pasa ya cambió la respuesta. Corre la misma comparación que el backend, una muestra antes. Y sólo puede **ensanchar** el par, nunca angostarlo — de ahí que el reset de medianoche, lo único que el pliegue no puede cubrir (bajar a los extremos de un día nuevo no es algo que una lectura pueda hacer sola), quede para la refetch y acotado a un minuto.
+
+### Tooltip en la tendencia, con dos textos distintos a propósito
+
+Una banda es una lectura que **necesita su escala explicada** — "Estable" no dice nada hasta saber contra qué, así que el tooltip da los ±1 y ±3 °C/h. `unknown` no es una lectura sino un estado que **se resuelve solo**; sin decirlo, "Midiendo…" parece algo trabado. Va con `title=` nativo, el idioma que la app ya usa (`energy.activeConsumptionTip`, `shell.nodeIpTip`).
+
+### Verificado en Chrome contra el backend de la Pi
+
+- **El refetch dispara solo**: instrumenté `fetch` y conté los pedidos a `stats/daily` — `13:10:57` y `13:11:57`, exactamente 60 s, sin recargar.
+- **El pliegue**, inyectando una lectura fuera de rango: la máx. de temperatura siguió a `12,34 °C` con la hora actual, la mín. quedó intacta, y en humedad se plegó sólo la mínima.
+- **Tooltips en EN y ES**, incluido `unknown` (hay que forzarlo — el backend real siempre manda una banda).
+- **Mobile 390 px** vía iframe: sin desborde (`scrollWidth` 375), tarjeta 343 px, pie sin romperse.
+
+> ⚠️ El tooltip nativo **no se captura en screenshots** vía CDP: lo dibuja el browser fuera del árbol de la página. Se verifica leyendo el atributo en el DOM, no buscándolo en una foto.
+
+Durante la prueba la máxima del día se movió sola de 8,87 a 8,93 — confirmación al pasar de que el bug era real.
+
 ## ✅ Tendencia de temperatura — DESPLEGADA (2026-08-15)
 
 **La Pi corre backend `1.6.0` y frontend `1.8.0`.** Confirmado el 2026-08-15 por tres vías: el endpoint de versión, el hash del bundle servido (`index-BHsBAyvK.js`, idéntico al build local) y la API ya devolviendo `tempTrend`.
