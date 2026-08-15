@@ -4,11 +4,11 @@
 
 _Última actualización: 2026-08-15_
 
-## 🚧 Extremos del día en vivo + tooltip de tendencia — frontend `1.9.0`, LISTO PARA DESPLEGAR (2026-08-15)
+## ✅ Extremos del día en vivo + tooltip de tendencia — DESPLEGADA (2026-08-15)
+
+**La Pi corre frontend `1.9.0` y backend `1.6.0`.** Confirmado por el hash del bundle servido (`index-DXFhDInd.js` y `index-Ds3bdHAu.css`, idénticos al build local), el badge (`ui 1.9.0 · api 1.6.0`) y el endpoint de versión.
 
 Dos cosas que Mau reportó probando `1.8.0` en la Pi. Backend sin cambios, sigue en `1.6.0`.
-
-> Bundle a verificar tras el deploy: **`index-DXFhDInd.js`**. La técnica es comparar ese hash contra el que sirve la Pi — el browser cachea y el badge de versión llega a mentir, como pasó en el deploy de `1.7.0`.
 
 ### 🐞 Los máx./mín. del día estaban congelados hasta recargar
 
@@ -35,6 +35,12 @@ Una banda es una lectura que **necesita su escala explicada** — "Estable" no d
 > ⚠️ El tooltip nativo **no se captura en screenshots** vía CDP: lo dibuja el browser fuera del árbol de la página. Se verifica leyendo el atributo en el DOM, no buscándolo en una foto.
 
 Durante la prueba la máxima del día se movió sola de 8,87 a 8,93 — confirmación al pasar de que el bug era real.
+
+### Sobre el build desplegado, ya en la Pi
+
+Refetch de `stats/daily` disparando solo (14:18:23, sin recargar), tendencia y tooltip presentes, y la máxima **quedándose quieta en 9,74 cuando debía**: la temperatura llegó a 9,72 y se dio vuelta sin cruzarla. Ese es el caso inerte del pliegue —lectura dentro del rango, extremos sin tocar— que es el que corre el 99% del tiempo.
+
+**Lo que queda sin ver con datos reales es el pliegue disparando**, porque para eso hace falta estar mirando justo cuando se marca un récord. Está verificado por inyección (máx. siguiendo a `12,34 °C` con la hora actual, mín. intacta), así que es cuestión de agarrarlo en vivo, no una duda sobre si anda. La franja de la rampa matinal es la de mejor chance.
 
 ## ✅ Tendencia de temperatura — DESPLEGADA (2026-08-15)
 
