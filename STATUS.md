@@ -24,9 +24,13 @@ Mau lo detectó por la vía correcta sin ver el CSS: *"la línea entre las celda
 - **La misma trampa venía de antes:** `.sticky-col` declara `border-right: 2px` desde siempre y **nunca se dibujó** por lo mismo. La columna de días estaba separada de los datos por la misma hairline que todo lo demás. Arreglado en la misma tanda.
 - Todos los overrides llevan ahora un calificador (`.calendar-table td.data-cell`, `.calendar-table .month-header`) que **supera** a la regla base en vez de empatarle y ganar por orden, para que mover un bloque no lo deshaga. Hay un comentario en la regla base avisando: simplificar un selector a una sola clase vuelve a aclarar la grilla sin ningún error que lo delate.
 
-### El arreglo: color por superficie, y una jerarquía donde había una malla pareja
+### El arreglo: un gris opaco, y una jerarquía donde había una malla pareja
 
-Sobre las celdas pintadas el separador se dibuja en **casi negro** (`--cell-rule: #05060a`), que lee como hueco contra cualquier paso de la escala. Es más oscuro que el fondo de la página a propósito: los dos pasos fríos (`#313695`, `#4575b4`) son ellos mismos más oscuros que la página, así que una línea del color del fondo se perdía ahí. Sobre los headers —superficies casi negras— se queda la línea blanca, porque ahí la invisible sería la oscura.
+Sobre las celdas pintadas el separador es **`--cell-rule: #5c5e65`** — el color al que resuelve el `rgba(255, 255, 255, 0.25)` del header sobre su propia banda casi negra, escrito plano. Así la línea sobre las celdas y la del header leen como **una sola**, en vez de como dos decisiones. Sobre los headers se queda la declaración translúcida, porque ahí la invisible sería la oscura.
+
+**Por qué gris y no negro, que era la primera versión:** el negro gana en contraste de luminancia contra nueve de los diez pasos, y contra el par frío (`#313695`, `#4575b4`) el gris marca apenas ~1,4. Pero ese número es sólo luminancia. Verificado en pantalla, el gris **se distingue igual sobre los azules**, porque es desaturado y esos pasos son azul saturado: el borde lo sostiene el croma donde el brillo ya no tiene nada que decir. Decisión de Mau, y es la correcta para una superficie cuya paleta entera es apagada — el negro se distinguía más y saltaba de más.
+
+> Vale como método: **la métrica de contraste WCAG es sólo luminancia y subestima un separador desaturado sobre color saturado.** Sirve para descartar, no para decidir sola. Acá dijo que el gris fallaba y en pantalla no falla.
 
 Y el ancho pasó a significar algo, cuando antes todos los bordes eran iguales:
 
@@ -44,7 +48,7 @@ Las celdas vacías se quedan con la grilla blanca tenue a propósito — es la z
 
 ### Verificado en Chrome (dev server contra el backend de la Pi)
 
-- **Por `getComputedStyle`, celda por clase:** dentro del par `1px rgb(5,6,10)`, fila `3px rgb(5,6,10)`, gutter de mes `6px rgb(5,6,10)`, headers `6px rgba(255,255,255,0.25)`, columna de días con su hairline blanca intacta.
+- **Por `getComputedStyle`, celda por clase:** dentro del par `1px rgb(92,94,101)`, fila `3px rgb(92,94,101)`, gutter de mes `6px rgb(92,94,101)`, headers `6px rgba(255,255,255,0.25)`, columna de días con su hairline blanca intacta.
 - Escritorio y **mobile 390 px vía iframe**: las filas leen como bandas y los meses como bloques en los dos.
 - El anillo blanco del `:hover` sigue dibujándose bien contra el borde de 6 px.
 - `npm run lint` y `npm run build` limpios.
