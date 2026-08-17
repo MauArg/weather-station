@@ -2,7 +2,41 @@
 
 > Actualizar este archivo al final de cada sesión de trabajo relevante. Es el punto de partida para la siguiente conversación — ver política en [`CLAUDE.md`](./CLAUDE.md).
 
-_Última actualización: 2026-08-15_
+_Última actualización: 2026-08-16_
+
+## 🚧 Grilla del calendario — LISTO PARA DESPLEGAR (frontend `1.9.1`)
+
+Mau: *"en el calendario, quizás haga falta poner unas líneas entre los días. Actualmente todas las celdas están iguales y es como que la vista confunde MIN/MAX de un día con el otro."*
+
+### La causa: la grilla estaba dibujada para el fondo equivocado
+
+Las líneas de la tabla eran `rgba(255, 255, 255, 0.1)` — un color elegido para el vidrio oscuro que rodea la tabla. Pero **las celdas tienen diez fondos distintos**, y ocho de los diez pasos del mapa de calor son medios o claros (`#ffffbf`, `#e0f3f8`, `#fee090`…). 10% de blanco sobre eso no existe. Verificado leyendo el computed style en producción: celda `rgb(254, 224, 144)` con borde `rgba(255, 255, 255, 0.1)`.
+
+O sea que **la grilla se desvanecía exactamente donde hay datos**, y una fila de 24 celdas pintadas se leía como una sola banda continua. Donde la grilla sí se veía era en la zona vacía, que es la que no importa.
+
+### El arreglo: color por superficie, y una jerarquía donde había una malla pareja
+
+Sobre las celdas pintadas el separador se dibuja en el fondo de la página (`--cell-rule: #1a1b26`), que lee como hueco contra cualquier paso de la escala, frío o caliente. Sobre los headers y la columna de días —superficies oscuras— se queda la línea blanca, porque ahí la invisible sería la oscura.
+
+Y el ancho pasó a significar algo, cuando antes todos los bordes eran iguales:
+
+| separación | ancho | por qué |
+|---|---|---|
+| entre Máx y Mín del mismo mes | 1 px | el par es **un día**, se mantiene junto |
+| entre días (filas) | 2 px | es lo más difícil de sostener: un día cruza 24 celdas pintadas |
+| entre meses | 3 px | cierra el bloque de dos columnas — antes esta línea era idéntica a la de arriba, que es lo que dejaba aparear un Máx con el día equivocado |
+
+La clase `month-end` va en la celda Mín de cada mes en **las tres filas** (header, datos y vacías) para que el gutter corra de arriba a abajo. En el header se dibuja con `rgba(255, 255, 255, 0.25)` en vez de `0.1`: ensanchada, la línea tenue lee como mancha en vez de como divisor.
+
+Las celdas vacías se quedan con la grilla blanca tenue a propósito — es la zona sin datos y conviene que siga callada.
+
+### Verificado en Chrome (dev server contra el backend de la Pi)
+
+- Escritorio y **mobile 390 px vía iframe**: las filas leen como bandas y los meses como bloques en los dos.
+- El anillo blanco del `:hover` sigue dibujándose bien contra el borde de 3 px.
+- `npm run lint` y `npm run build` limpios.
+
+> 🐞 **Encontrado al pasar, no tocado:** la vista de calendario desborda 17 px a lo ancho en el layout de teléfono (`scrollWidth` 392 contra `clientWidth` 375). Es `.calendar-container.full-width`, que tiene `width: 100%` más `padding: 1rem` sin `box-sizing: border-box` — **el mismo bug que ya se arregló en `#root`**, en otra caja. Medido con y sin los estilos nuevos: 392 en los dos casos, así que es preexistente. Se arregla con una línea cuando Mau diga.
 
 ## ✅ Extremos del día en vivo + tooltip de tendencia — DESPLEGADA (2026-08-15)
 
