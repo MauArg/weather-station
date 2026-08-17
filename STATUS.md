@@ -14,17 +14,29 @@ Las líneas de la tabla eran `rgba(255, 255, 255, 0.1)` — un color elegido par
 
 O sea que **la grilla se desvanecía exactamente donde hay datos**, y una fila de 24 celdas pintadas se leía como una sola banda continua. Donde la grilla sí se veía era en la zona vacía, que es la que no importa.
 
+### ⚠️ La trampa que se comió el primer intento: especificidad CSS, en silencio
+
+El primer intento **no aplicó el color**, y ni el build ni el lint dicen nada. `.calendar-table td` es **(0,1,1)** —una clase y un elemento— así que un `.data-cell` pelado, **(0,1,0)**, pierde contra él y sus bordes se ignoran, sin importar el orden en el archivo. Lo único que sí ganó fue `.calendar-table .month-end` (0,2,0), que sólo declara el *ancho*: quedaron gutters anchos pero **del blanco 10% de siempre**.
+
+Mau lo detectó por la vía correcta sin ver el CSS: *"la línea entre las celdas se sigue perdiendo… quizás deberían ser más gruesas y oscuras en vez de claras"*. Estaban literalmente claras.
+
+- **La lección de método:** un cambio de CSS no está verificado por mirar una captura. Se confirma leyendo el `getComputedStyle` de una celda de cada clase. Una regla que no aplica se ve *parecida* a una que sí, y ese parecido fue lo que dejó pasar el primer intento.
+- **La misma trampa venía de antes:** `.sticky-col` declara `border-right: 2px` desde siempre y **nunca se dibujó** por lo mismo. La columna de días estaba separada de los datos por la misma hairline que todo lo demás. Arreglado en la misma tanda.
+- Todos los overrides llevan ahora un calificador (`.calendar-table td.data-cell`, `.calendar-table .month-header`) que **supera** a la regla base en vez de empatarle y ganar por orden, para que mover un bloque no lo deshaga. Hay un comentario en la regla base avisando: simplificar un selector a una sola clase vuelve a aclarar la grilla sin ningún error que lo delate.
+
 ### El arreglo: color por superficie, y una jerarquía donde había una malla pareja
 
-Sobre las celdas pintadas el separador se dibuja en el fondo de la página (`--cell-rule: #1a1b26`), que lee como hueco contra cualquier paso de la escala, frío o caliente. Sobre los headers y la columna de días —superficies oscuras— se queda la línea blanca, porque ahí la invisible sería la oscura.
+Sobre las celdas pintadas el separador se dibuja en **casi negro** (`--cell-rule: #05060a`), que lee como hueco contra cualquier paso de la escala. Es más oscuro que el fondo de la página a propósito: los dos pasos fríos (`#313695`, `#4575b4`) son ellos mismos más oscuros que la página, así que una línea del color del fondo se perdía ahí. Sobre los headers —superficies casi negras— se queda la línea blanca, porque ahí la invisible sería la oscura.
 
 Y el ancho pasó a significar algo, cuando antes todos los bordes eran iguales:
 
 | separación | ancho | por qué |
 |---|---|---|
-| entre Máx y Mín del mismo mes | 1 px | el par es **un día**, se mantiene junto |
-| entre días (filas) | 2 px | es lo más difícil de sostener: un día cruza 24 celdas pintadas |
-| entre meses | 3 px | cierra el bloque de dos columnas — antes esta línea era idéntica a la de arriba, que es lo que dejaba aparear un Máx con el día equivocado |
+| entre Máx y Mín del mismo mes | 1 px | el par es **un día**; tiene que ser el más débil para que las dos mitades se sostengan juntas |
+| entre días (filas) | 3 px | es lo más difícil de sostener: un día cruza 24 celdas pintadas |
+| entre meses | 6 px | cierra el bloque de dos columnas |
+
+**Los 6 px del gutter no son decoración:** con 3 el mes seguía perdiendo contra las líneas de día y había que subir la vista al header para saber qué par era de qué mes — exactamente lo que la tabla existe para ahorrarte. Fue el segundo reporte de Mau.
 
 La clase `month-end` va en la celda Mín de cada mes en **las tres filas** (header, datos y vacías) para que el gutter corra de arriba a abajo. En el header se dibuja con `rgba(255, 255, 255, 0.25)` en vez de `0.1`: ensanchada, la línea tenue lee como mancha en vez de como divisor.
 
@@ -32,11 +44,21 @@ Las celdas vacías se quedan con la grilla blanca tenue a propósito — es la z
 
 ### Verificado en Chrome (dev server contra el backend de la Pi)
 
+- **Por `getComputedStyle`, celda por clase:** dentro del par `1px rgb(5,6,10)`, fila `3px rgb(5,6,10)`, gutter de mes `6px rgb(5,6,10)`, headers `6px rgba(255,255,255,0.25)`, columna de días con su hairline blanca intacta.
 - Escritorio y **mobile 390 px vía iframe**: las filas leen como bandas y los meses como bloques en los dos.
-- El anillo blanco del `:hover` sigue dibujándose bien contra el borde de 3 px.
+- El anillo blanco del `:hover` sigue dibujándose bien contra el borde de 6 px.
 - `npm run lint` y `npm run build` limpios.
 
-> 🐞 **Encontrado al pasar, no tocado:** la vista de calendario desborda 17 px a lo ancho en el layout de teléfono (`scrollWidth` 392 contra `clientWidth` 375). Es `.calendar-container.full-width`, que tiene `width: 100%` más `padding: 1rem` sin `box-sizing: border-box` — **el mismo bug que ya se arregló en `#root`**, en otra caja. Medido con y sin los estilos nuevos: 392 en los dos casos, así que es preexistente. Se arregla con una línea cuando Mau diga.
+### 📌 PENDIENTE ANOTADO — desborde horizontal del calendario en teléfono
+
+Encontrado al pasar en esta sesión, **no tocado** (Mau pidió dejarlo pinpointeado y decidir aparte).
+
+La vista de calendario desborda **17 px** a lo ancho en el layout de teléfono: `document.scrollWidth` 392 contra `clientWidth` 375, medido a 390 px vía iframe.
+
+- **Causa:** `.calendar-container.full-width` (`src/index.css`) tiene `width: 100%` más `padding: 1rem` **sin `box-sizing: border-box`**. Es **el mismo bug que ya se arregló en `#root`** el 2026-08-15, en otra caja — y era previsible, porque ahí se decidió a propósito declarar `border-box` sólo donde estaba el bug en vez de globalmente. Esta es la segunda caja que aparece.
+- **Es preexistente, no lo trajo la grilla:** medido con y sin los estilos nuevos, 392 px en los dos casos.
+- **El arreglo es una línea**: `box-sizing: border-box` en esa regla. Verificarlo es re-medir `scrollWidth` contra `clientWidth` a 390 px.
+- **Ojo al arreglarlo:** no convertirlo en un reset global. El comentario de `#root` explica por qué — este `index.css` tiene muchas cajas con padding y un reset las redimensiona todas en silencio.
 
 ## ✅ Extremos del día en vivo + tooltip de tendencia — DESPLEGADA (2026-08-15)
 
