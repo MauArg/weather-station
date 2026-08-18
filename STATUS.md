@@ -40,6 +40,23 @@ Se hace con `margin-right: auto` y no con `justify-content: space-between`, porq
 
 **Sin color**, a diferencia de la tendencia. Esa ya lleva la escala divergente azul/rojo para esta misma magnitud; un segundo número coloreado diciendo "más cálido o más frío" competiría con el primero por el mismo significado. El signo alcanza.
 
+### 🐞 Arreglado de paso: los decimales desaparecían en los valores redondos
+
+Preexistente, notado al mirar de cerca la tarjeta nueva. `formatValue` usaba `minDigits: 0`, así que **una lectura que caía en un valor redondo perdía sus decimales**: el titular pasaba de `14,04 °C` a `14 °C`, cambiaba de ancho a mitad de vistazo y por un momento se leía como otra clase de número. En el pie era peor: `19,2 °C` y `2,54 °C` convivían en la misma fila de la misma tarjeta.
+
+La herramienta ya existía y decía exactamente esto: `formatFixed` en `utils/timezone.js` documenta que *los ceros a la derecha se conservan —"4,00 V", no "4 V"— porque son lecturas de instrumento y la precisión es parte de lo que se muestra*. Sólo faltaba usarla.
+
+**Ahora hay dos formateadores, y cuál le toca a una magnitud dice algo sobre la magnitud:**
+
+- `formatValue` — enteros por naturaleza: los mW, que el nodo reporta como `long`. Un decimal ahí inventaría precisión que el instrumento nunca tuvo. `Panel 92 mW` se queda como está.
+- `formatReading` — los sensores, con dos decimales fijos: temperatura, humedad, punto de rocío, los extremos del pie, la referencia de las 24 h y los volts del pack.
+- `formatPressure` — igual, pero con **agrupamiento apagado**, que la presión ya necesitaba para que 1021,72 no salga como "1.021,72".
+- El **SoC va a un decimal**, no dos: es una estimación, y `91,60 %` reclamaría centésimas de punto porcentual que no tiene.
+
+Se emparejaron también los tooltips de los gráficos de temperatura y humedad, que grafican las mismas magnitudes que las tarjetas encabezan. El de energía queda con el formato suelto porque son los mW enteros, y el de retardo térmico **elige la precisión por `dataKey`** igual que ya elegía la unidad: la temperatura ambiente coincide con la tarjeta, el índice de luz sigue suelto.
+
+> Un bug latente que cayó con el mismo cambio: el titular de la tarjeta de presión —el que se muestra cuando el nodo no reportó QNH— usaba `formatValue`, **con agrupamiento**, en vez del `formatPressure` de sus propias variantes. Hoy no se ve porque la presión de estación acá tiene tres dígitos, pero era el separador esperando a los cuatro.
+
 ### Verificado end-to-end, backend local contra el InfluxDB de producción
 
 Con `MQTT_CLIENT_ID=weather-station-backend-localtest` — pisarlo es obligatorio o Mosquitto patea al backend de la Pi.
@@ -47,6 +64,7 @@ Con `MQTT_CLIENT_ID=weather-station-backend-localtest` — pisarlo es obligatori
 - **El campo sale bien:** `temp24hAgo` = 12,72 °C a las `2026-08-17T19:58:37Z`, contra la petición de las `19:58:25Z` — **12 segundos de desvío** respecto de las 24 h exactas.
 - **La resta sigue al poll de 3 s, no al de 60:** inyectando 25,5 °C en `/weather/current`, el bloque pasó a `+12,9 °C` (25,5 − 12,57) con **0 refetches de `stats/daily`** contados en el mismo experimento. Esa es la propiedad que justifica restar en el frontend, y quedó medida y no argumentada.
 - **El caso sin dato:** borrando `temp24hAgo` de la respuesta, el bloque desaparece y los extremos siguen ahí. La tarjeta no se rompe.
+- **Los decimales fijos, forzando el caso exacto**: inyectando lecturas redondas (14, 30, −4, 930, 4 V, 92 %) las tarjetas quedaron en `14,00 °C`, `30,00 %`, `930,00 hPa`, `-4,00 °C` y la fila del pack en `Batería 92,0% · 4,00 V`.
 - **Los dos idiomas**, con el tooltip completo y paridad de claves y placeholders EN/ES verificada programáticamente.
 - **Mobile 390 px vía iframe:** tres bloques entran sin envolver (pie de 293 px sobre tarjeta de 343), `scrollWidth` 375 = `clientWidth`, y la regla del pie sigue alineada con la de humedad.
 - `go build`, `go vet`, `go test`, y `npm run lint` / `npm run build` limpios. `gofmt` sólo marca las dos líneas con espacios al final que ya estaban — el código nuevo pasa.
