@@ -4,6 +4,86 @@
 
 _Última actualización: 2026-08-18_
 
+## 🚧 Presión suavizada en el backend — LISTO PARA DESPLEGAR (backend `1.8.0` + frontend `1.11.0`)
+
+Mau notó que en live mode los valores saltan, y trajo como referencia [ClimaSurGBA](https://climasurgba.com.ar/sensor/termometro), una estación casera que muestrea cada 20 s durante 10 min y reporta el promedio. Después hizo **la pregunta que cambió el diseño**: ¿esto no puede vivir en el backend, y que el nodo siga siendo un *dumb sensor reading node*?
+
+**La respuesta fue que sí, y el nodo no se tocó.**
+
+### La distinción que decide dónde va cada cosa
+
+Promediar **N lecturas del mismo instante** y promediar **N lecturas de instantes distintos** no son la misma operación:
+
+- El **nodo** puede leer ocho veces en un segundo. En ese segundo el aire no cambió, así que lo único que varía es el ruido: el promedio ataca ruido puro y deja la señal intacta.
+- El **backend** sólo ve una muestra por minuto. Puede promediar varias, pero cada una es un momento distinto: ataca ruido **y señal juntos**. Es un filtro pasabajos, no una medición mejor.
+
+Por eso la respuesta no es "backend siempre" sino **depende del sensor**, y eso se midió.
+
+### Lo que dijeron nuestros datos (3 días, 13.838 muestras de InfluxDB)
+
+Salto mediano entre muestras consecutivas, 5 s (live) contra 60 s (normal):
+
+| | 5 s | 60 s | lectura |
+|---|---|---|---|
+| Temperatura | 0,030 °C | 0,040 °C | piso de ruido, pero la cola es señal real |
+| **Presión** | **0,040 hPa** | **0,040 hPa** | **ruido puro — sin señal a esa escala** |
+| Humedad | 0,190 % | 0,080 % | ⚠️ anomalía sin explicar |
+
+**La presión es idéntica a 5 s y a 60 s.** Doce veces el intervalo produciendo el mismo cambio es la firma de un piso de ruido: la atmósfera no aporta nada ahí, porque la presión se mueve en horas. Suavizarla en el backend no aplasta ninguna señal porque no hay ninguna.
+
+**Temperatura queda afuera**: su cola sí escala con el tiempo (p99 sube de 0,24 a 0,51 °C entre 5 s y 60 s), así que una ventana útil estaría recortando clima. **Humedad también**, y por una razón más fuerte: el salto a 5 s es **mayor** que a 60 s, lo cual es imposible para señal atmosférica. Hay algo que el live mode le agrega, y un filtro encima lo taparía en vez de arreglarlo.
+
+### La ventana, medida y no elegida a ojo
+
+Replayando la serie real por ventanas móviles, puntuadas contra una ventana centrada del mismo ancho como referencia de "verdad":
+
+| ventana | modo | jitter | lag | error total |
+|---|---|---|---|---|
+| crudo | — | 0,0400 | 0 | 0,0420 |
+| **3 min** | **live** | **0,0000** | **0,0300** | **0,0300** |
+| **3 min** | **normal** | **0,0200** | **0,0200** | **0,0283** |
+| 5 min | normal | 0,0100 | 0,0300 | 0,0316 |
+| 10 min | normal | 0,0100 | 0,0450 | 0,0461 |
+
+**3 minutos es el único rango donde el error total queda por debajo del ruido crudo.** Más allá de 5 min el atraso introducido supera al ruido eliminado — el número se ve más calmo y está más lejos de la presión real. Los 10 min de la estación de referencia puntúan 0,046, peor que no hacer nada: ellos reportan una vez por ventana y nunca pagan el lag.
+
+**Mediana y no media**: iguala o mejora el error total en todas las filas, y con 3 muestras —lo que la ventana tiene a cadencia normal— rechaza un outlier entero. Los dos estimadores nunca difirieron más de 0,012 hPa, apenas un paso de cuantización del sensor.
+
+### La ventana es temporal, no por cantidad de muestras
+
+Es la lección que ya estaba escrita en `bridge.go` sobre `batteryLiveWindow`, y acá se respetó: un anillo medido en muestras cambia de significado solo cuando cambia la cadencia. Tres minutos son ~32 muestras en live y 3 en modo normal, y la atenuación de señal es la misma. Hay un test que lo fija (`TestSmoothedPressureIsUnaffectedByCadence`).
+
+### Lo que NO cambió
+
+- **El nodo no se tocó.** Ni una línea de firmware.
+- **InfluxDB sigue guardando el dato crudo.** Sólo se suaviza el valor *servido* en `/weather/current`; la serie histórica queda intacta y Grafana ve lo de siempre. Era el argumento más fuerte de Mau a favor del backend y se preservó entero.
+- Los gráficos ya agregaban en ventanas de 15 min en Flux. `stats/daily` sigue sobre puntos crudos.
+
+### Backend `1.8.0`
+
+- **`internal/smoothing`** — el estimador puro, sin reloj ni anillo, al lado de `temptrend` y `energy`. `MinSamples = 3` y `Median`, que copia el slice antes de ordenar porque el caller se lo arma desde un anillo cuyo orden es su significado.
+- **Anillo de presión en el bridge**, espejo de `appendTempLive`: evicción por edad, válvula de capacidad, alimentado desde `onTelemetry`. **QNH se guarda con su propio flag de presencia** — el nodo lo omite cuando falla el BMP085, y aparearlos habría tirado una lectura de estación buena por una derivada faltante.
+- **`SmoothedPressure(window)`**, sin latch a diferencia de `TempTrend`: no hay banda que recordar, así que es una lectura pura.
+- **Fallback obligatorio al crudo** con el anillo frío. A diferencia de la tendencia, acá `unknown` no es opción: una tarjeta de presión sin número se lee como estación rota.
+
+### Verificado contra el InfluxDB de producción
+
+Con `MQTT_CLIENT_ID=weather-station-backend-localtest` — pisarlo es obligatorio o Mosquitto patea al backend de la Pi.
+
+**El arranque en frío primero, que era el riesgo real:** apenas levanta, el anillo está vacío y `/weather/current` devolvió el valor crudo (`931,9`), nunca cero ni vacío.
+
+**El mecanismo, verificado de forma determinística y no estadística.** Muestreé lo servido durante 12,4 min y, para cada payload, comparé contra la mediana de los crudos de los 3 min previos leídos de InfluxDB:
+
+- **12 de 13 coinciden exactamente.**
+- **La única que no es el fallback funcionando**: a las 23:41:37 el anillo llevaba 2 muestras —el proceso había arrancado a las 23:39— y sirvió el crudo `931,81` en vez de la mediana `931,85`. Desde la tercera muestra en adelante calza siempre.
+- En **6 de esos 12** el suavizado cambió el número que se muestra; en los otros la mediana coincidía con la última lectura.
+
+> ⚠️ **La magnitud de la mejora NO sale de esta corrida.** Doce minutos a cadencia de 60 s son 13 payloads, y la mediana de 12 diferencias es demasiado ruidosa para medir nada (dio 1,2× contra los 2× esperados, con un intervalo que no excluye ninguna de las dos). El número que vale es el del replay sobre 3 días, arriba. Lo que esta corrida prueba es que **el código hace exactamente lo que dice**, que es lo que no se puede sacar de una simulación.
+
+### Frontend `1.11.0`
+
+El caption decía **"estación · lectura cruda del sensor"**, que con el suavizado pasaba a ser falso. Ahora dice "estación · sensor local", y `StatCard` ganó una prop opcional `captionTip` que **se suma** al tooltip que el caption ya tenía —"click para ver la otra"— en vez de reemplazarlo. Las otras tres tarjetas no la pasan y quedan igual.
+
 ## ✅ Diferencia de temperatura contra hace 24 h — DESPLEGADA (2026-08-18)
 
 **La Pi corre backend `1.7.0` y frontend `1.10.0`.** Confirmado por el hash del bundle servido (`index-nhzTYbXS.js` y `index-BQ00sJHK.css`, idénticos al build local), el badge (`ui 1.10.0 · api 1.7.0`) y el endpoint de versión.
