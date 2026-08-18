@@ -2,9 +2,52 @@
 
 > Actualizar este archivo al final de cada sesión de trabajo relevante. Es el punto de partida para la siguiente conversación — ver política en [`CLAUDE.md`](./CLAUDE.md).
 
-_Última actualización: 2026-08-16_
+_Última actualización: 2026-08-18_
 
-## 🚧 Grilla del calendario — LISTO PARA DESPLEGAR (frontend `1.9.1`)
+## 🚧 Diferencia de temperatura contra hace 24 h — LISTO PARA DESPLEGAR (backend `1.7.0` + frontend `1.10.0`)
+
+Pedido de Mau: entrar al dashboard y ver de un vistazo si está más frío o más cálido que ayer a esta hora. Le sirve de noche, para comparar la curva de descenso contra la de la noche anterior.
+
+**Es la primera tanda en varias que toca los dos repos**, así que van dos imágenes.
+
+### Lo que se decidió antes de escribir nada
+
+Se discutió el diseño con Mau antes de implementar. Tres cosas quedaron cerradas:
+
+1. **Un tercer bloque en el pie de la tarjeta de temperatura**, reusando la forma etiqueta/valor que ya tienen Máx./Mín. `StatCard.jsx` documenta por qué no puede ser una fila nueva: la nota comparte la línea del titular justamente para que la regla del pie quede a la misma altura en las cuatro tarjetas, y una fila nueva en una desalinea las cuatro.
+2. **Sólo la diferencia, en dos líneas.** Mau sacó la tercera línea ("ayer 23:40") por redundante. La referencia se mudó al `title=` nativo, que es el idioma que la app ya usa y no gasta alto.
+3. **La curva fantasma de ayer sobre el gráfico queda descartada**, no anotada como pendiente. Se planteó porque el delta puntual no contesta *"¿la curva baja igual?"* —dos noches distintas se cruzan en algún punto y ahí el número marca ~0— pero Mau decidió que el delta le alcanza.
+
+### Backend `1.7.0`: `temp24hAgo` en `/weather/stats/daily`
+
+- **Va en `stats/daily`, no en `/weather/current`**, porque cuesta una query y ese endpoint se pollea cada 3 s. Es la misma razón por la que los extremos viven ahí. Ese endpoint, a esta altura, es "los números que las tarjetas necesitan y son muy caros para pedir a 3 s"; el nombre quedó de antes.
+- **La query es angosta a propósito**: media hora de un solo campo alrededor de `now − 24h`. Nada que ver con `GetDailyRaw`, que escanea todos los puntos crudos desde la medianoche local y crece durante el día.
+- **Tolerancia de ±15 min, y afuera de eso el campo se omite.** Con telemetría cada minuto la ventana nunca ata; lo que acota es el caso feo: después de un corte la lectura más cercana puede estar a horas, y una diferencia tomada contra otra parte de la noche no es una respuesta más gruesa, es una **equivocada con el mismo signo confiado que una buena**.
+- **Se omite, no se manda en cero.** Un hueco tiene que leerse como "no hay comparación"; un cero se lee como "no cambió", que es otra afirmación y encima segura.
+- **El fallo de esa query no es fatal.** Es una segunda pregunta viajando en la misma respuesta: un hipo de InfluxDB no puede llevarse puesto el pie entero de la tarjeta.
+- **`Time` va en RFC3339**, distinto del `"15:04:05"` de los extremos. El dashboard reconstruye esos pegándoles la fecha UTC de hoy adelante, lo que para una lectura de ayer nombra un instante corrido 24 h — bien en la carátula del reloj por accidente, mal apenas algo mire la fecha.
+- La política pura (`nearestTo`) vive en el servicio y tiene tests: elige el más cercano, acepta el borde exacto de la ventana, prefiere el futuro si está más cerca, y devuelve nil ante un corte. Uno de los tests fija que **0 °C es un dato y no un hueco** — una mañana de invierno acá marca eso.
+
+### Frontend `1.10.0`: la resta se hace acá
+
+El backend manda **la lectura, no la diferencia**. La resta ocurre en el frontend porque la lectura vieja sólo cambia cuando el instante de referencia se corre —una vez cada 60 s— mientras que el valor vivo contra el que se compara se mueve cada 3 s. Restar en el backend congelaría la respuesta al más lento de los dos relojes y haría que el bloque contradiga al titular que tiene tres centímetros arriba. Es el mismo razonamiento del pliegue de los extremos.
+
+**Sin color**, a diferencia de la tendencia. Esa ya lleva la escala divergente azul/rojo para esta misma magnitud; un segundo número coloreado diciendo "más cálido o más frío" competiría con el primero por el mismo significado. El signo alcanza.
+
+### Verificado end-to-end, backend local contra el InfluxDB de producción
+
+Con `MQTT_CLIENT_ID=weather-station-backend-localtest` — pisarlo es obligatorio o Mosquitto patea al backend de la Pi.
+
+- **El campo sale bien:** `temp24hAgo` = 12,72 °C a las `2026-08-17T19:58:37Z`, contra la petición de las `19:58:25Z` — **12 segundos de desvío** respecto de las 24 h exactas.
+- **La resta sigue al poll de 3 s, no al de 60:** inyectando 25,5 °C en `/weather/current`, el bloque pasó a `+12,9 °C` (25,5 − 12,57) con **0 refetches de `stats/daily`** contados en el mismo experimento. Esa es la propiedad que justifica restar en el frontend, y quedó medida y no argumentada.
+- **El caso sin dato:** borrando `temp24hAgo` de la respuesta, el bloque desaparece y los extremos siguen ahí. La tarjeta no se rompe.
+- **Los dos idiomas**, con el tooltip completo y paridad de claves y placeholders EN/ES verificada programáticamente.
+- **Mobile 390 px vía iframe:** tres bloques entran sin envolver (pie de 293 px sobre tarjeta de 343), `scrollWidth` 375 = `clientWidth`, y la regla del pie sigue alineada con la de humedad.
+- `go build`, `go vet`, `go test`, y `npm run lint` / `npm run build` limpios. `gofmt` sólo marca las dos líneas con espacios al final que ya estaban — el código nuevo pasa.
+
+> ⚠️ Lo verificado por tests y no en campo es el **camino de la tolerancia**: para verlo con datos reales haría falta un hueco de más de 15 min alrededor de las 24 h justas. La query y el camino feliz sí están probados contra producción.
+
+## ✅ Grilla del calendario — LISTO PARA DESPLEGAR (frontend `1.9.1`)
 
 Mau: *"en el calendario, quizás haga falta poner unas líneas entre los días. Actualmente todas las celdas están iguales y es como que la vista confunde MIN/MAX de un día con el otro."*
 
