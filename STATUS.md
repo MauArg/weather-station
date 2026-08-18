@@ -4,7 +4,11 @@
 
 _Última actualización: 2026-08-18_
 
-## 🚧 Diferencia de temperatura contra hace 24 h — LISTO PARA DESPLEGAR (backend `1.7.0` + frontend `1.10.0`)
+## ✅ Diferencia de temperatura contra hace 24 h — DESPLEGADA (2026-08-18)
+
+**La Pi corre backend `1.7.0` y frontend `1.10.0`.** Confirmado por el hash del bundle servido (`index-nhzTYbXS.js` y `index-BQ00sJHK.css`, idénticos al build local), el badge (`ui 1.10.0 · api 1.7.0`) y el endpoint de versión.
+
+En el build desplegado: `temp24hAgo` = 11,68 °C de las `2026-08-17T21:23:25Z` contra un pedido de las `21:23:49Z` — **24 segundos** de desvío respecto de las 24 h exactas. El pie dibuja `Dif. 24 h +0,1 °C` a la izquierda y `Máx. hoy 19,20 °C · Mín. hoy 2,54 °C` a la derecha, con los decimales fijos también en la mínima de humedad (`23,30 %`, que llega como `23.3`).
 
 Pedido de Mau: entrar al dashboard y ver de un vistazo si está más frío o más cálido que ayer a esta hora. Le sirve de noche, para comparar la curva de descenso contra la de la noche anterior.
 
