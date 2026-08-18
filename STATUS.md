@@ -32,6 +32,12 @@ Se discutió el diseño con Mau antes de implementar. Tres cosas quedaron cerrad
 
 El backend manda **la lectura, no la diferencia**. La resta ocurre en el frontend porque la lectura vieja sólo cambia cuando el instante de referencia se corre —una vez cada 60 s— mientras que el valor vivo contra el que se compara se mueve cada 3 s. Restar en el backend congelaría la respuesta al más lento de los dos relojes y haría que el bloque contradiga al titular que tiene tres centímetros arriba. Es el mismo razonamiento del pliegue de los extremos.
 
+**El bloque ancla el extremo izquierdo del pie**, con los extremos del día quedándose contra el derecho. Fue idea de Mau al verlo funcionando, y arregla algo que la primera versión traía: con tres bloques apretados a la derecha, la mitad izquierda de la regla quedaba vacía y el nuevo se leía como una lista que había crecido en uno. Separado, el pie recupera el balance de dos extremos que la tarjeta ya tiene arriba, y **el hueco del medio hace el agrupamiento**: la comparación con ayer es otra familia que los extremos de hoy, y ahora se ve sin necesidad de un divisor.
+
+Se hace con `margin-right: auto` y no con `justify-content: space-between`, porque el pie tiene que seguir funcionando **cuando el bloque no está**: si el backend lo omite tras un corte, los extremos vuelven solos a pegarse a la derecha como antes de que esto existiera. Y va alineado a la izquierda, al revés que sus hermanos: ellos se alinean a la derecha para que sus dígitos cuadren contra el borde de la tarjeta, y este no tiene vecino a su izquierda.
+
+> Mau dudaba de que en mobile diera el espacio. **Da**: medido a 390 px, la separación entre el bloque y el par es de **102 px** — los tres bloques suman 167 px en un pie de 293. No hizo falta media query.
+
 **Sin color**, a diferencia de la tendencia. Esa ya lleva la escala divergente azul/rojo para esta misma magnitud; un segundo número coloreado diciendo "más cálido o más frío" competiría con el primero por el mismo significado. El signo alcanza.
 
 ### Verificado end-to-end, backend local contra el InfluxDB de producción
