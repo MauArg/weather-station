@@ -45,6 +45,16 @@ El arreglo es que el gráfico se construya **sólo mientras su tab se muestra** 
 
 **`LivePanel` leía `state.retained`, un campo que el backend nunca sirvió** — es `retainedCmd`, como ya lo leían bien `OtaWizard` y `LogPanel`. Confirmado contra el payload real: la clave `retained` **no existe**. O sea que `isArmed` y `otherCommand` estaban clavados en `false`, y se perdían el badge "armado · esperando el despertar" y —más grave— **el guard que evita que un `live` pise un `maintenance` retenido**, la misma clase de bug que este documento ya registra para `log_on`.
 
+### Pasada de revisión visual, ya con las tabs terminadas
+
+Con las cuatro tabs andando, la tab **Control** eran tres tarjetas de ancho completo (1628 px) y ~225 px de alto cada una: todas apaisadas, con el contenido pegado a la izquierda. **Live mode y la consola median 224 y 237 px** — el mismo argumento de pareo que Estado ya usa para batería ↔ salud — así que van lado a lado. Quedan en 806 px y 256 px parejos, y la tab baja de **719 a 498 px**. El wizard se queda con las dos columnas: tiene el tracker de pasos y la prosa para llenarlas.
+
+**Los topes de ancho se midieron después del pareo, no antes.** Con las tarjetas ya en 806 px, la grilla de stats de live (765 px) y el campo de JSON crudo (645 px) quedaron razonables solos. **El único que hizo falta topar fue el slider de timeout**, que vive en el wizard de ancho completo: media 1587 px para un rango de 1 a 60 min —27 px por minuto— con el handle a una pantalla de distancia del número que setea. Topado en 22rem.
+
+> ⚠️ **Trampa de JSX que tiró el dev server**: un `{/* comentario */}` **antes del elemento raíz de un `return`** es un segundo hijo, no un comentario sobre él. Va arriba del `return`, como comentario de línea.
+
+**Decidido no hacer**: los párrafos explicativos siguen corriendo a ancho completo en el wizard (~200 caracteres por línea). Topar la medida de lectura toca toda la vista y no sólo esa tab; decisión de Mau fue parar en el pareo y los anchos de control.
+
 ### Layout de teléfono, medido
 
 La franja y la barra son puro chrome, y entre las dos se comían **228 px de un viewport de 780** antes de la primera tarjeta. Las cuatro tabs con sus íconos miden 391 px contra los 343 que deja un teléfono de 390: wrapeaban a una segunda fila. Con padding y tipografía más ajustados quedan en **321 px — una fila, con los íconos, sin sacar nada**. Chrome total: **147 px a 390, 98 px a 600**. A 360 px vuelve a wrapear, que es el fallback buscado en vez de esconder una tab detrás de un scroll horizontal.
