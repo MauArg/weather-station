@@ -2,9 +2,11 @@
 
 > Actualizar este archivo al final de cada sesión de trabajo relevante. Es el punto de partida para la siguiente conversación — ver política en [`CLAUDE.md`](./CLAUDE.md).
 
-_Última actualización: 2026-08-18_
+_Última actualización: 2026-08-19_
 
-## 🚧 Presión suavizada en el backend — LISTO PARA DESPLEGAR (backend `1.8.0` + frontend `1.11.0`)
+## ✅ Presión suavizada en el backend — DESPLEGADA (2026-08-19)
+
+**La Pi corre backend `1.8.0` y frontend `1.11.0`.** Confirmado por el hash del bundle servido (`index-COsoImBv.js` y `index-BQ00sJHK.css`, idénticos al build local), el badge (`ui 1.11.0 · api 1.8.0`) y el endpoint de versión.
 
 Mau notó que en live mode los valores saltan, y trajo como referencia [ClimaSurGBA](https://climasurgba.com.ar/sensor/termometro), una estación casera que muestrea cada 20 s durante 10 min y reporta el promedio. Después hizo **la pregunta que cambió el diseño**: ¿esto no puede vivir en el backend, y que el nodo siga siendo un *dumb sensor reading node*?
 
@@ -79,6 +81,44 @@ Con `MQTT_CLIENT_ID=weather-station-backend-localtest` — pisarlo es obligatori
 - En **6 de esos 12** el suavizado cambió el número que se muestra; en los otros la mediana coincidía con la última lectura.
 
 > ⚠️ **La magnitud de la mejora NO sale de esta corrida.** Doce minutos a cadencia de 60 s son 13 payloads, y la mediana de 12 diferencias es demasiado ruidosa para medir nada (dio 1,2× contra los 2× esperados, con un intervalo que no excluye ninguna de las dos). El número que vale es el del replay sobre 3 días, arriba. Lo que esta corrida prueba es que **el código hace exactamente lo que dice**, que es lo que no se puede sacar de una simulación.
+
+### Confirmado sobre el build ya desplegado
+
+Muestreando producción y comparando cada payload contra la mediana de los crudos de los 3 min previos leídos de InfluxDB: **7 de 7 coinciden exactamente, cero discrepancias**, y en 3 de esos 7 la mediana difería de la última lectura — o sea que el suavizado se ve.
+
+La serie cruda contra la servida en esa ventana:
+
+```
+crudo    932,52  932,54  932,61  932,61  932,61  932,57  932,62
+servido  932,52  932,54  932,54  932,61  932,61  932,61  932,61
+```
+
+El crudo sube 0,07, se planta, baja 0,04 y vuelve a subir; el servido sube una vez y se queda quieto.
+
+### 📌 PENDIENTE ANOTADO — la ráfaga de temperatura, que sí necesita firmware
+
+Mau preguntó, antes de desplegar, si la temperatura también se podía resolver desde el backend. **Se midió y no se puede**, y el análisis corrigió lo que esta misma sesión había dicho antes.
+
+**El error previo:** se usó la **mediana** del salto entre muestras y se concluyó "piso de ruido". La mediana está dominada por las horas quietas. El **RMS**, que pesa los momentos activos, no tiene meseta en ninguna escala medible: 0,070 °C a 5 s, 0,123 a 10 s, 0,404 a 60 s, 1,021 a 600 s. El aire se mueve de verdad a todas esas escalas.
+
+Deriva real medida sobre 5 días en ventanas de ±5 min: **mediana 0,81 °C/h, p90 3,81, p99 10,7** — bastante más activa de lo asumido.
+
+**Por qué el backend no llega**, con el ruido por muestra en 0,031 °C (estimación generosa con la opción backend; el real es menor):
+
+| ventana | modo | n | ruido resid. | error señal | total |
+|---|---|---|---|---|---|
+| crudo | — | 1 | 0,031 | 0 | **0,031** |
+| 3 min | normal | **3** | 0,022 | 0,020 | 0,030 (aire calmo) |
+| 3 min | normal | 3 | 0,022 | **0,095** | **0,098** (deriva p90) |
+| 1 min | live | 12 | 0,011 | 0,032 | 0,034 (deriva p90) |
+
+A cadencia normal **la única ventana que entra son 3 muestras**: no gana nada con aire calmo y pierde 3× cuando el aire se mueve, que es el 10% del tiempo.
+
+**Lo que sólo el nodo puede hacer:** 8 lecturas dentro de ~1 s dan ruido residual 0,0137 °C con **error de señal 0,0011** — porque no hay atraso, son ocho lecturas *del mismo instante*. 2,3× mejor que el crudo y, a diferencia de toda opción de backend, **no se degrada cuando el clima está activo**. Con 16 lecturas, 0,0097.
+
+**Energéticamente sale gratis**: la ventana despierta ya paga ~1,3 s esperando el warmup del DHT22 (`config.h`, `DHT_WARMUP_MS`) y en live mode el loop idlea 5 s pumpeando MQTT. No hace falta estar despierto más tiempo, hace falta usar el tiempo muerto ya pagado.
+
+**Recomendación: no hacer el viaje sólo por esto.** El ruido que se elimina está seis veces por debajo de la exactitud del SHT31 (±0,2 °C). Pero **bundlearlo con el promediado por hardware del INA219** —ítem 2 de la fila de power management, también firmware— reparte el costo del flasheo entre dos mejoras. Decisión de Mau, pendiente.
 
 ### Frontend `1.11.0`
 
