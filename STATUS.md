@@ -4,11 +4,13 @@
 
 _Última actualización: 2026-08-19_
 
-## 🚧 Service mode en tabs — 2 de 3 checkpoints, NADA DESPLEGADO (2026-08-19, sesión de tarde)
+## ✅ Service mode en tabs — CÓDIGO TERMINADO, FALTA DESPLEGAR (2026-08-19)
 
-> ⚠️ **La Pi sigue con frontend `1.11.0` y backend `1.8.0`.** Todo lo de abajo está commiteado y pusheado en los dos repos, pero **no se rebuildeó ni desplegó nada**, y **ninguna versión se bumpeó todavía** — la regla del repo es que bumpear es el último paso antes de rebuildear. Cuando se despliegue: frontend a `1.12.0` y backend a `1.9.0` (los dos suman features compatibles hacia atrás).
+> ⚠️ **La Pi sigue con frontend `1.11.0` y backend `1.8.0`.** Todo está commiteado, pusheado y **bumpeado a frontend `1.12.0` / backend `1.9.0`**, pero **no se rebuildearon ni se publicaron las imágenes**. Lo que falta es operativo: `docker build` + push de las dos imágenes a Docker Hub, y `docker compose pull && up -d` en la Pi.
+>
+> **Los dos pueden desplegarse por separado**: el `normalCycleSec` del backend es aditivo y el frontend cae a su `FALLBACK_CYCLE_SEC` contra un backend viejo (probado contra el `1.8.0` de la Pi).
 
-Sesión cortada por presupuesto de usage, no por bloqueo. El plan completo vive en `C:\Users\maulp\.claude-personal\plans\optimized-jumping-snowflake.md`.
+Los tres checkpoints están hechos. El plan completo vive en `C:\Users\maulp\.claude-personal\plans\optimized-jumping-snowflake.md`.
 
 ### Lo que motivó la reorganización
 
@@ -43,14 +45,23 @@ El arreglo es que el gráfico se construya **sólo mientras su tab se muestra** 
 
 **`LivePanel` leía `state.retained`, un campo que el backend nunca sirvió** — es `retainedCmd`, como ya lo leían bien `OtaWizard` y `LogPanel`. Confirmado contra el payload real: la clave `retained` **no existe**. O sea que `isArmed` y `otherCommand` estaban clavados en `false`, y se perdían el badge "armado · esperando el despertar" y —más grave— **el guard que evita que un `live` pise un `maintenance` retenido**, la misma clase de bug que este documento ya registra para `log_on`.
 
-### Lo que falta: checkpoint 3
+### Layout de teléfono, medido
 
-1. **Layout angosto**: la barra wrapea a dos filas a 390 px, que funciona, pero no se revisó a fondo el comportamiento a ≤600 px.
-2. **Pasada de accesibilidad completa** (lo verificado hasta ahora: flechas/Home/End con wrap, foco siguiendo la selección, y que un botón dentro de una tab oculta rechaza el foco).
-3. **Bump de versiones** frontend y backend, rebuild de las dos imágenes y deploy.
-4. Revisar si `.svc-lastseen` / `.svc-countdown-*` quedaron con reglas CSS sin uso tras mover la fila a la franja fija.
+La franja y la barra son puro chrome, y entre las dos se comían **228 px de un viewport de 780** antes de la primera tarjeta. Las cuatro tabs con sus íconos miden 391 px contra los 343 que deja un teléfono de 390: wrapeaban a una segunda fila. Con padding y tipografía más ajustados quedan en **321 px — una fila, con los íconos, sin sacar nada**. Chrome total: **147 px a 390, 98 px a 600**. A 360 px vuelve a wrapear, que es el fallback buscado en vez de esconder una tab detrás de un scroll horizontal.
 
-## ✅ El panel de logs pregunta el ciclo en vez de asumir 64 s — SIN DESPLEGAR (2026-08-19)
+> 🔎 **La trampa de CSS**: la media query tenía que ir **después** de las reglas base de `.svc-tab`, no antes. Misma especificidad, así que decide el orden de fuente — arriba de ellas matcheaba igual y **perdía en silencio**. Costó una pasada de medición darse cuenta.
+
+### Accesibilidad, verificada
+
+Sólo la tab seleccionada es tabulable (roving `tabIndex`); Tab desde la barra cae dentro del panel visible; flechas y Home/End se mueven con wrap y arrastran la selección; y un botón dentro de una tab oculta **rechaza el foco** (`display:none`, confirmado con `checkVisibility()` y con un intento real de `focus()`).
+
+> Una sonda mía dio un falso positivo acá y conviene no repetirla: contar focuseables con `offsetParent !== null` **no sirve** — `offsetParent` no existe en `SVGElement`, así que los nodos del gráfico de Recharts con `tabindex` pasaban el filtro. Usar `checkVisibility()`.
+
+### Deuda que apareció de paso
+
+**`package-lock.json` decía `1.6.0`.** Venía desincronizado de varios bumps atrás, porque bumpear acá siempre fue editar `package.json` a mano y no `npm version`. Sincronizado a `1.12.0` — el `CLAUDE.md` del frontend afirma que el campo de `package.json` es la única copia, y eso había dejado de ser cierto en silencio.
+
+## ✅ El panel de logs pregunta el ciclo en vez de asumir 64 s — SIN DESPLEGAR, backend `1.9.0` (2026-08-19)
 
 Era la deuda anotada dos veces en este documento: `CYCLE_SEC = 64` hardcodeado en `LogPanel.jsx`, alimentando las estimaciones de ventana de captura (`~19,5 h` / `~8,0 h` / `~2,7 h`), mientras el nodo reporta su propio `next_s` desde el firmware `1.18.0`.
 
@@ -62,7 +73,7 @@ Era la deuda anotada dos veces en este documento: `CYCLE_SEC = 64` hardcodeado e
 
 **Frontend**: el `64` sobrevive como `FALLBACK_CYCLE_SEC` para un backend viejo, y el texto **dice cuál de los dos está usando** en vez de afirmar que una suposición es una medición. Probado contra el `1.8.0` de la Pi: cae al fallback sin romper nada.
 
-## ✅ El desborde horizontal de service mode — SIN DESPLEGAR (2026-08-19)
+## ✅ El desborde horizontal de service mode — SIN DESPLEGAR, frontend `1.12.0` (2026-08-19)
 
 La vista arrastraba **63 px de scrollbar horizontal a todo ancho**. La causa: `.svc-tip::after` se oculta con `visibility`, **no con `display`**, así que un tooltip invisible **igual ocupa layout**, y los que pasaban el borde derecho estiraban el área scrolleable de forma permanente.
 
