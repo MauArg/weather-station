@@ -4,6 +4,77 @@
 
 _Última actualización: 2026-08-19_
 
+## 🚧 Service mode en tabs — 2 de 3 checkpoints, NADA DESPLEGADO (2026-08-19, sesión de tarde)
+
+> ⚠️ **La Pi sigue con frontend `1.11.0` y backend `1.8.0`.** Todo lo de abajo está commiteado y pusheado en los dos repos, pero **no se rebuildeó ni desplegó nada**, y **ninguna versión se bumpeó todavía** — la regla del repo es que bumpear es el último paso antes de rebuildear. Cuando se despliegue: frontend a `1.12.0` y backend a `1.9.0` (los dos suman features compatibles hacia atrás).
+
+Sesión cortada por presupuesto de usage, no por bloqueo. El plan completo vive en `C:\Users\maulp\.claude-personal\plans\optimized-jumping-snowflake.md`.
+
+### Lo que motivó la reorganización
+
+La vista había crecido por acumulación: **siete tarjetas sueltas en una pantalla**, una por sesión. El `LogPanel` ya nacía colapsado para no aplastar al resto, que es la señal de que se quedó sin lugar. Mau quiere agregar **gráficos de temperatura/humedad de la caja estanca** (los sensores ya publican `dht11_temp_c`, `dht11_hum_pct`, `ds18b20_c`) y un **histórico de señal WiFi** — y sumarlos al layout viejo lo empeoraba. La separación es requisito previo.
+
+### La arquitectura, decidida con Mau
+
+| Tab | Contenido | Futuro |
+|---|---|---|
+| **Estado** | Salud del nodo, sensores, anomalías de `boot_count`, batería + tendencia | temp/hum de la caja, histórico de RSSI |
+| **Control** | Wizard de OTA, live mode, consola de comandos | |
+| **Logs** | `LogPanel` completo | |
+| **MQTT** | Visor de payloads | |
+
+Más una **franja fija** sobre las tabs (chip de estado del nodo + visto por última vez + próximo esperado) e **indicadores** en las tabs: un punto cuando hay captura corriendo, live mode corriendo o un comando retenido.
+
+### 🔑 La decisión que no conviene revertir: las tabs ocultan, no desmontan
+
+Los `tabpanel` inactivos usan el atributo `hidden`, **no** render condicional. Razón concreta: `LogPanel` guarda en `pending` la espera de confirmación de un comando de captura, con un `setTimeout` de 4 min, y **no hay nada que la reconstruya desde el servidor**. Desmontar borraría el spinner con el comando todavía en vuelo y **rehabilitaría los botones Arrancar/Detener encima de uno sin confirmar**. Además `BatteryPanel` re-consultaría InfluxDB en cada cambio de tab.
+
+**No cuesta nada**: los siete paneles ya re-renderizaban en cada push del SSE, así que mantenerlos montados es exactamente el comportamiento de antes. Verificado: cambiar de tab dispara **cero llamadas de API**, y el rango del sparkline elegido antes de irse sigue elegido al volver.
+
+> Desmontar sería una optimización posible, pero exige antes subir `pending` fuera de `LogPanel`.
+
+### ⚠️ La trampa que esto destapó, y que va a volver con los gráficos nuevos
+
+**Un gráfico dentro de una tab oculta no se re-mide.** `ResponsiveContainer` de Recharts se dimensiona contra su padre, y un padre en `display:none` no mide nada: si la ventana cambia de ancho mientras la tab está oculta, al volver el gráfico conserva el ancho viejo. Medido: **611 px de gráfico dentro de un viewport de 375 px, 273 px de desborde de página**.
+
+El arreglo es que el gráfico se construya **sólo mientras su tab se muestra** (`active` como prop). No pierde nada, porque la serie y el rango viven en el estado del panel. **Los gráficos de la caja estanca y de RSSI caen en la tab Estado, así que van a necesitar lo mismo.**
+
+### Bug preexistente arreglado de paso, verificado contra el nodo
+
+**`LivePanel` leía `state.retained`, un campo que el backend nunca sirvió** — es `retainedCmd`, como ya lo leían bien `OtaWizard` y `LogPanel`. Confirmado contra el payload real: la clave `retained` **no existe**. O sea que `isArmed` y `otherCommand` estaban clavados en `false`, y se perdían el badge "armado · esperando el despertar" y —más grave— **el guard que evita que un `live` pise un `maintenance` retenido**, la misma clase de bug que este documento ya registra para `log_on`.
+
+### Lo que falta: checkpoint 3
+
+1. **Layout angosto**: la barra wrapea a dos filas a 390 px, que funciona, pero no se revisó a fondo el comportamiento a ≤600 px.
+2. **Pasada de accesibilidad completa** (lo verificado hasta ahora: flechas/Home/End con wrap, foco siguiendo la selección, y que un botón dentro de una tab oculta rechaza el foco).
+3. **Bump de versiones** frontend y backend, rebuild de las dos imágenes y deploy.
+4. Revisar si `.svc-lastseen` / `.svc-countdown-*` quedaron con reglas CSS sin uso tras mover la fila a la franja fija.
+
+## ✅ El panel de logs pregunta el ciclo en vez de asumir 64 s — SIN DESPLEGAR (2026-08-19)
+
+Era la deuda anotada dos veces en este documento: `CYCLE_SEC = 64` hardcodeado en `LogPanel.jsx`, alimentando las estimaciones de ventana de captura (`~19,5 h` / `~8,0 h` / `~2,7 h`), mientras el nodo reporta su propio `next_s` desde el firmware `1.18.0`.
+
+**`expectedIntervalSec` no servía como fuente, aunque parezca el candidato obvio.** Es contextual: vale 30 s con el nodo en service mode y 5 s en live. El panel habría mostrado `~1,5 h` en vez de `~19,5 h` justo cuando tenés la sesión abierta, que es cuando se lee.
+
+**Backend**: `NodeHealth` gana `normalCycleSec`, escrito **sólo desde telemetría no-live** (`next_s + wakeOverheadSec`), así que ni una sesión live ni una de service mode lo pisan. El mismo valor corrige un segundo lugar donde vivía el 64: la cuenta regresiva **después** de `service_mode_ended`.
+
+**Verificado en campo con el nodo en una sesión live**, que es el caso discriminante: `expectedIntervalSec = 5` contra `normalCycleSec = 64`. Tests en `normal_cycle_test.go`, mutados contra la implementación ingenua para confirmar que no son vacuos.
+
+**Frontend**: el `64` sobrevive como `FALLBACK_CYCLE_SEC` para un backend viejo, y el texto **dice cuál de los dos está usando** en vez de afirmar que una suposición es una medición. Probado contra el `1.8.0` de la Pi: cae al fallback sin romper nada.
+
+## ✅ El desborde horizontal de service mode — SIN DESPLEGAR (2026-08-19)
+
+La vista arrastraba **63 px de scrollbar horizontal a todo ancho**. La causa: `.svc-tip::after` se oculta con `visibility`, **no con `display`**, así que un tooltip invisible **igual ocupa layout**, y los que pasaban el borde derecho estiraban el área scrolleable de forma permanente.
+
+Dos mitades, y ninguna cubre a la otra:
+
+- **`scale: 0` en reposo** saca la caja oculta del cálculo sin perder el fade. Tiene que ser una regla y no una clase por sitio: en los chips de sensores **cuál queda al borde depende de cómo wrapea la fila**. Para eso `transform` se separó en la propiedad `translate` sola.
+- **`.svc-tip-right`**, espejo del `svc-tip-left` que ya existía, para que el tooltip mostrado siga siendo legible.
+
+**Hallazgo al aplicarlo**: `boot_count` y `RSSI` tenían `svc-tip-left` estando en la columna del medio y la de la derecha del grid. Medidos los tres anclajes en 11 anchos, el izquierdo era **la peor** opción ahí (102 y 103 px de desborde, contra 0 del derecho). No se veía sin medir.
+
+**Queda abierto**: en anchos de teléfono unos pocos tooltips todavía se pasan 1–42 px al mostrarse. Un tooltip de 304 px no entra en un viewport de 390 px en ninguna posición; pide un tope de ancho relativo al viewport (`max-width: min(280px, calc(100vw - 2rem))`), no otra clase por sitio.
+
 ## ✅ Presión suavizada en el backend — DESPLEGADA (2026-08-19)
 
 **La Pi corre backend `1.8.0` y frontend `1.11.0`.** Confirmado por el hash del bundle servido (`index-COsoImBv.js` y `index-BQ00sJHK.css`, idénticos al build local), el badge (`ui 1.11.0 · api 1.8.0`) y el endpoint de versión.
