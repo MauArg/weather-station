@@ -4,6 +4,80 @@
 
 _Última actualización: 2026-08-20_
 
+## ✅ Gráficos del gabinete y de señal WiFi — CÓDIGO TERMINADO, FALTA DESPLEGAR (2026-08-20)
+
+> ⚠️ **La Pi corre frontend `1.12.0` y backend `1.9.0`.** Todo commiteado, pusheado y bumpeado a **frontend `1.13.0` / backend `1.10.0`**, pero **sin rebuildear ni publicar imágenes**.
+>
+> **Acá los dos NO se pueden desplegar por separado.** Al revés que la tanda anterior: el frontend llama a dos endpoints que sólo existen en el `1.10.0`. Contra el backend viejo las dos tarjetas nuevas muestran su mensaje de error y el resto de la vista sigue andando — degrada, no rompe — pero los gráficos no aparecen hasta que suban los dos.
+
+Los dos gráficos que la reorganización en tabs había dejado lugar para. Caen en la tab **Estado**, que queda en 2×2: batería ↔ salud, gabinete ↔ WiFi.
+
+### 🔑 El hallazgo que decidió el diseño: el 73% de las muestras son de sesiones live
+
+De **29.120 muestras guardadas en 7 días, 21.321 vienen de sesiones live** publicando cada 5 s en vez del ciclo normal de ~64 s. Un `aggregateWindow(mean)` por ventana promedia **filas**, así que una hora que contiene una sesión live de diez minutos es ~90% esa sesión por conteo: su "media horaria" es en realidad la media de esos diez minutos con el timestamp de la hora puesto encima.
+
+Medido sobre la sonda del gabinete, una etapa contra dos:
+
+| | desvío |
+|---|---|
+| medio | 0,09 °C |
+| **peor hora** | **3,19 °C** |
+
+Y las horas que divergen **se agrupan en 14:00Z y 22:00Z, todos los días** — las sesiones automáticas. Sesgo sistemático a horas fijas, no ruido.
+
+**El sparkline de batería arrastraba exactamente la misma query desde el `1.0.0`.** Ahí el peor caso es **0,029 V** y el medio 0,0016 V, o sea invisible: los volts del pack no se mueven adentro de una ventana. El bug siempre estuvo en la query; lo que cambió fue la señal. Por eso `aggregateEvenly()` es compartido y la batería se migró también — la alternativa era que lo nuevo fuera la excepción correcta a un default equivocado, que es la forma que después se copia al revés.
+
+> Es la misma lección que `batteryLiveWindow` y el anillo de presión ya documentan desde el otro lado: **una ventana medida en muestras cambia de significado cuando cambia la cadencia.** Aquellos la arreglaron midiendo la ventana en tiempo; esta le da un voto a cada minuto antes de promediar.
+
+### 🔧 Dos rótulos que estaban mal, corregidos
+
+- **El DS18B20 está DENTRO de la caja.** `config.h` decía `// OneWire outdoor temperature` y nunca fue cierto del hardware desplegado. El backend ya lo rotulaba `DS18B20 (enclosure)`, el firmware lo usa como referencia para validar al DHT22 —que sólo tiene sentido si respiran el mismo aire— y los datos lo confirman: media 15,5 °C pegada al DHT22 (15,1) contra el SHT31 exterior en 12,7. Corregido en el repo del firmware; **son sólo comentarios, no hace falta reflashear.**
+- **Es un DHT22, no un DHT11.** `_dht(PIN_DHT22, DHT22)`. El campo MQTT `dht11_temp_c` es un nombre heredado del sensor viejo. **Renombrarlo NO se hizo y no conviene a la ligera**: tocaría firmware, backend e InfluxDB a la vez y partiría la serie histórica.
+
+### Las dos sondas del gabinete no son redundantes
+
+Era la premisa a corregir. De noche coinciden en **0,09–0,19 °C, plano los 7 días**. Pero a las **10:00 local se separan 1,12 °C de media, con el 62% de los minutos pasando 0,4 °C**, y la brecha decae hacia el mediodía. Es el sol cargando la caja: el DS18B20 es un TO-92 pelado sin masa térmica y sigue al aire; el DHT22 vive en una carcasa plástica ventilada y llega tarde.
+
+**Así que la brecha entre las dos líneas es una lectura en sí misma: cuánto se está calentando la caja en ese momento.** La línea secundaria gana un trabajo propio en vez de ser una copia.
+
+> **Los sensores están sanos.** `config.h:383` deja anotado un baseline (±0,4 °C, mediana −0,1) y pide re-correr la query para detectar regresión. Re-corrida: el acuerdo nocturno —la comparación libre de transitorios— está plano toda la semana. Lo que parecía degradación día a día es estacional, el sol subiendo.
+
+**El DS18B20 corre a 9 bits** (`sensors.cpp:91`, `setResolution(9)`): la serie cruda no contiene otra cosa que múltiplos de 0,5 °C. En el gráfico no se ve porque el backend promedia minutos, pero **el valor instantáneo del panel sí salta de a medio grado**. El reparto real es: la sonda es rápida y gruesa, el DHT22 es fino y lento.
+
+### Decisiones de gráfico
+
+- **Un solo hue para las dos sondas**, separadas por peso (2,2 px sólida contra 1,2 px punteada al 50%). Un tinte más claro se probó primero y **leía como un segundo color** —que es justo la afirmación que no queremos hacer— y encima no se veía subordinado: sobre fondo oscuro un rojo más claro es *más* prominente, no menos.
+- **El punto de rocío no entró como cuarta línea.** El margen midió 5,8–8,0 °C toda la semana; una línea entera para algo que nunca pasa pesa más de lo que informa. Va como lectura en el encabezado, con ícono y texto además del color.
+- **RSSI como banda, no como línea.** Dos semanas de medias diarias entran en **4,5 dB** — la media sola dibuja una horizontal. Lo que hace fallar un publish son los malos momentos, y esos viven en el min/máx de cada ventana (p05 = −73 dBm contra media −67,7).
+- **Dos gráficos apilados y no dos ejes** en la tarjeta del gabinete. Dos escalas en un plot dejan inferir cruces que son artefacto de dónde se fijó cada escala.
+- **El eje de humedad va padeado alrededor del dato**, no de 0 a 100: la caja nunca salió de 45–70% y un eje anclado en cero gasta dos tercios del alto en estados que no puede alcanzar mientras aplasta el movimiento que sí hay.
+- La paleta pasó el validador en todo lo que decide legibilidad (**ΔE 20,6 protanopía, 30,1 visión normal, contraste ≥3:1**). El único FAIL es la banda de luminosidad del sistema de referencia, y **la app entera está fuera de esa banda** — cambiar sólo estos dos gráficos los habría desacoplado del resto.
+
+### ⚠️ La trampa que casi pasa por buena: la animación de Recharts nunca terminaba
+
+Los gráficos nuevos se veían **vacíos**, con el marco y los ejes dibujados y ninguna línea. Recharts dibuja una línea animando `stroke-dasharray` de `"0, largoTotal"` al patrón real, y estos paneles **re-renderizan con cada push del SSE, ~1 vez por segundo**: la animación se reiniciaba más rápido de lo que tardaba en terminar y el gráfico quedaba clavado en su primer frame. Medido: el trazo principal decía `stroke-dasharray: "32.15px 987.76px"` — **32 px dibujados de una línea de 1020**.
+
+Se ve *exactamente* igual que un gráfico sin datos, que es por qué no se detectó mirando capturas. Salió midiendo el `d` y el `getBBox()` de los `path`. Arreglo: `isAnimationActive={false}` en todas las series nuevas.
+
+> El de batería sobrevive con la animación prendida porque cuelga de `measuredAt`, que se mueve una vez por ciclo de telemetría. Estos cuelgan del reloj del nodo y se re-animarían cada 5 s durante una sesión live.
+
+### Verificado
+
+- **Contra el InfluxDB de producción**, backend local con `MQTT_CLIENT_ID` pisado: de **51 ventanas** comparadas contra una query Flux directa, la única que difiere es la primera de la referencia —la que el `range` recorta a la mitad—. Las otras 50 coinciden hasta el float.
+- **Tests del helper mutados** contra la implementación de una sola etapa: colapsarla rompe dos tests. No son vacuos.
+- **Sin desborde en 8 anchos** de 360 a 1400 px, con los 4 gráficos presentes en todos.
+- **El gateo por tab anda**: 0 curvas con la tab oculta, 4 al volver.
+- `go build`, `go vet`, `go test` (9 paquetes), `npm run lint` y `npm run build` limpios. Los 3 archivos que marca `gofmt` son preexistentes, de `ab0cfb2`.
+
+> 🔎 **Una medición mía dio un falso negativo y conviene no repetirla**: probar 8 iframes a la vez dispara 24 queries concurrentes contra el Influx local, y los gráficos salen vacíos por timeout, no por bug. Con un iframe solo, 6 curvas y 0 desborde. Medir de a uno.
+
+### Deuda anotada
+
+- **`package-lock.json` se sincronizó solo** esta vez: se usó `npm version minor` en vez de editar `package.json` a mano, que era la causa de la desincronización anotada en la tanda anterior. Conviene que quede como la forma de bumpear.
+- **La leyenda del gráfico de temperatura lista al DHT22 antes que al DS18B20** y no sigue ni el orden de render ni un `payload` explícito (se probó, lo ignora). Se dejó así a propósito: los rótulos cargan la jerarquía («sonda» contra «atrasado») y el gráfico ya es inequívoco por peso.
+- **Las series nuevas no extienden con el anillo del bridge**, a diferencia de la batería. Durante una sesión de service mode el nodo no publica telemetría, así que queda un hueco de hasta una hora en el borde derecho. Deliberado: la batería es lo que se mira *mientras* se decide flashear, esto no, y cubrirlo costaría un anillo por campo.
+- **La tarjeta de salud del nodo queda con un hueco grande** cuando se estira para igualar a la de batería. Preexistente de la tanda de tabs, no se tocó.
+
 ## ✅ Service mode en tabs — DESPLEGADA (2026-08-20)
 
 **La Pi corre frontend `1.12.0` y backend `1.9.0`.** Confirmado por las tres vías de siempre: el hash del bundle servido (`index-BSn1Z00V.js` y `index-CDtc7Tlv.css`, idénticos al build local), la versión embebida en ese bundle (`1.12.0`) y el endpoint de versión (`{"version":"1.9.0"}`). **El firmware no se tocó: sigue en `1.18.0`.**
