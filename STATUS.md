@@ -2,13 +2,13 @@
 
 > Actualizar este archivo al final de cada sesión de trabajo relevante. Es el punto de partida para la siguiente conversación — ver política en [`CLAUDE.md`](./CLAUDE.md).
 
-_Última actualización: 2026-08-19_
+_Última actualización: 2026-08-20_
 
-## ✅ Service mode en tabs — CÓDIGO TERMINADO, FALTA DESPLEGAR (2026-08-19)
+## ✅ Service mode en tabs — DESPLEGADA (2026-08-20)
 
-> ⚠️ **La Pi sigue con frontend `1.11.0` y backend `1.8.0`.** Todo está commiteado, pusheado y **bumpeado a frontend `1.12.0` / backend `1.9.0`**, pero **no se rebuildearon ni se publicaron las imágenes**. Lo que falta es operativo: `docker build` + push de las dos imágenes a Docker Hub, y `docker compose pull && up -d` en la Pi.
->
-> **Los dos pueden desplegarse por separado**: el `normalCycleSec` del backend es aditivo y el frontend cae a su `FALLBACK_CYCLE_SEC` contra un backend viejo (probado contra el `1.8.0` de la Pi).
+**La Pi corre frontend `1.12.0` y backend `1.9.0`.** Confirmado por las tres vías de siempre: el hash del bundle servido (`index-BSn1Z00V.js` y `index-CDtc7Tlv.css`, idénticos al build local), la versión embebida en ese bundle (`1.12.0`) y el endpoint de versión (`{"version":"1.9.0"}`). **El firmware no se tocó: sigue en `1.18.0`.**
+
+> **Los dos podían desplegarse por separado** — `normalCycleSec` es aditivo y el frontend cae a su `FALLBACK_CYCLE_SEC` contra un backend viejo, probado contra el `1.8.0` de la Pi. Se desplegaron juntos igual.
 
 Los tres checkpoints están hechos. El plan completo vive en `C:\Users\maulp\.claude-personal\plans\optimized-jumping-snowflake.md`.
 
@@ -71,7 +71,7 @@ Sólo la tab seleccionada es tabulable (roving `tabIndex`); Tab desde la barra c
 
 **`package-lock.json` decía `1.6.0`.** Venía desincronizado de varios bumps atrás, porque bumpear acá siempre fue editar `package.json` a mano y no `npm version`. Sincronizado a `1.12.0` — el `CLAUDE.md` del frontend afirma que el campo de `package.json` es la única copia, y eso había dejado de ser cierto en silencio.
 
-## ✅ El panel de logs pregunta el ciclo en vez de asumir 64 s — SIN DESPLEGAR, backend `1.9.0` (2026-08-19)
+## ✅ El panel de logs pregunta el ciclo en vez de asumir 64 s — DESPLEGADA, backend `1.9.0` (2026-08-20)
 
 Era la deuda anotada dos veces en este documento: `CYCLE_SEC = 64` hardcodeado en `LogPanel.jsx`, alimentando las estimaciones de ventana de captura (`~19,5 h` / `~8,0 h` / `~2,7 h`), mientras el nodo reporta su propio `next_s` desde el firmware `1.18.0`.
 
@@ -83,7 +83,9 @@ Era la deuda anotada dos veces en este documento: `CYCLE_SEC = 64` hardcodeado e
 
 **Frontend**: el `64` sobrevive como `FALLBACK_CYCLE_SEC` para un backend viejo, y el texto **dice cuál de los dos está usando** en vez de afirmar que una suposición es una medición. Probado contra el `1.8.0` de la Pi: cae al fallback sin romper nada.
 
-## ✅ El desborde horizontal de service mode — SIN DESPLEGAR, frontend `1.12.0` (2026-08-19)
+**Confirmado sobre el build desplegado, y de casualidad en el caso que importa:** al verificar el deploy había una sesión live corriendo, así que `/api/v1/service/state` devolvió `expectedIntervalSec: 5` contra `normalCycleSec: 64` en el mismo payload. Esa divergencia es literalmente la razón de ser del campo, y quedó vista en producción y no sólo en un test.
+
+## ✅ El desborde horizontal de service mode — DESPLEGADA, frontend `1.12.0` (2026-08-20)
 
 La vista arrastraba **63 px de scrollbar horizontal a todo ancho**. La causa: `.svc-tip::after` se oculta con `visibility`, **no con `display`**, así que un tooltip invisible **igual ocupa layout**, y los que pasaban el borde derecho estiraban el área scrolleable de forma permanente.
 
@@ -287,7 +289,9 @@ Con `MQTT_CLIENT_ID=weather-station-backend-localtest` — pisarlo es obligatori
 
 > ⚠️ Lo verificado por tests y no en campo es el **camino de la tolerancia**: para verlo con datos reales haría falta un hueco de más de 15 min alrededor de las 24 h justas. La query y el camino feliz sí están probados contra producción.
 
-## ✅ Grilla del calendario — LISTO PARA DESPLEGAR (frontend `1.9.1`)
+## ✅ Grilla del calendario — DESPLEGADA (frontend `1.9.1`, arrastrada por una tanda posterior)
+
+> El encabezado decía **"LISTO PARA DESPLEGAR"** hasta el 2026-08-20, y era un marcador viejo: nunca se desplegó sola, salió adentro del primer build que vino después. Confirmado leyendo el CSS servido por la Pi — `--cell-rule: #5c5e65` está en el bundle en producción.
 
 Mau: *"en el calendario, quizás haga falta poner unas líneas entre los días. Actualmente todas las celdas están iguales y es como que la vista confunde MIN/MAX de un día con el otro."*
 
