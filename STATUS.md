@@ -4,11 +4,11 @@
 
 _Última actualización: 2026-08-21_
 
-## ✅ Vistas de detalle por indicador y tendencia barométrica — CÓDIGO TERMINADO, FALTA DESPLEGAR (2026-08-21)
+## ✅ Vistas de detalle por indicador y tendencia barométrica — DESPLEGADA (2026-08-21)
 
-> ⚠️ **La Pi corre frontend `1.13.0` y backend `1.10.0`.** Todo commiteado, pusheado y bumpeado a **frontend `1.14.0` / backend `1.11.0`**, pero **sin rebuildear ni publicar imágenes**.
+> ✅ **En producción: frontend `1.14.0` / backend `1.11.0`.** Firmware sin tocar en `1.18.0`.
 >
-> **Los dos se pueden desplegar por separado, pero degradan distinto.** Todo lo nuevo del backend es aditivo, así que un frontend `1.13.0` contra el `1.11.0` simplemente ignora los campos. Al revés, el `1.14.0` contra el backend viejo pierde tres cosas y no rompe ninguna: el badge de tendencia no aparece (sin `pressureTrend` no se renderiza), el gráfico de marea muestra "sin datos", y la serie de rocío queda vacía en su gráfico mientras el resto del modal anda. Conviene desplegar los dos.
+> Verificado el 2026-08-21 contra la Pi: `/api/v1/version` devuelve `1.11.0`; el bundle servido es `index-DuB-Z4GB.js` + `index-Ci_x-KEt.css`, **hash idéntico al build local**; `stats/daily` trae `pressureTrend`, `pressureChangeHPa3h` y las 24 horas de `pressureTide`; y la historia trae `dewPoint` en cada punto.
 
 La reorganización que Mau planteó: **Home = lo que se mira de un vistazo, modal = el detalle ampliado**. Las cuatro tarjetas (T/H/P/PR) abren una vista dedicada, y las tarjetas se "descargaron" de todo lo que pedía comparar dos números.
 
@@ -97,7 +97,7 @@ Los umbrales salieron de los datos, no de un manual:
 
 ## ✅ Gráficos del gabinete y de señal WiFi — DESPLEGADA (2026-08-21)
 
-> ✅ **En producción: frontend `1.13.0` / backend `1.10.0`.** Firmware sin tocar en `1.18.0`.
+> ✅ **Al cerrar esta tanda corría frontend `1.13.0` / backend `1.10.0`** — superado el mismo día por la tanda de arriba (`1.14.0` / `1.11.0`). Firmware sin tocar en `1.18.0`.
 >
 > Verificado el 2026-08-21 contra la Pi: `/api/v1/version` devuelve `1.10.0`; el bundle servido es `index-BF4uglXk.js` + `index-q9n-BG2L.css`, **hash idéntico al build local**, con `1.13.0` embebida; `/service/enclosure-trend?hours=24` y `/service/wifi-trend?hours=24` responden `200` con datos reales (23,8 kB y 14,3 kB, ~150 ms).
 >
