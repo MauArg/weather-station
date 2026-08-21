@@ -2,13 +2,15 @@
 
 > Actualizar este archivo al final de cada sesión de trabajo relevante. Es el punto de partida para la siguiente conversación — ver política en [`CLAUDE.md`](./CLAUDE.md).
 
-_Última actualización: 2026-08-20_
+_Última actualización: 2026-08-21_
 
-## ✅ Gráficos del gabinete y de señal WiFi — CÓDIGO TERMINADO, FALTA DESPLEGAR (2026-08-20)
+## ✅ Gráficos del gabinete y de señal WiFi — DESPLEGADA (2026-08-21)
 
-> ⚠️ **La Pi corre frontend `1.12.0` y backend `1.9.0`.** Todo commiteado, pusheado y bumpeado a **frontend `1.13.0` / backend `1.10.0`**, pero **sin rebuildear ni publicar imágenes**.
+> ✅ **En producción: frontend `1.13.0` / backend `1.10.0`.** Firmware sin tocar en `1.18.0`.
 >
-> **Acá los dos NO se pueden desplegar por separado.** Al revés que la tanda anterior: el frontend llama a dos endpoints que sólo existen en el `1.10.0`. Contra el backend viejo las dos tarjetas nuevas muestran su mensaje de error y el resto de la vista sigue andando — degrada, no rompe — pero los gráficos no aparecen hasta que suban los dos.
+> Verificado el 2026-08-21 contra la Pi: `/api/v1/version` devuelve `1.10.0`; el bundle servido es `index-BF4uglXk.js` + `index-q9n-BG2L.css`, **hash idéntico al build local**, con `1.13.0` embebida; `/service/enclosure-trend?hours=24` y `/service/wifi-trend?hours=24` responden `200` con datos reales (23,8 kB y 14,3 kB, ~150 ms).
+>
+> Se desplegaron los dos juntos, que era el requisito: el frontend llama endpoints que sólo existen en el `1.10.0`.
 
 Los dos gráficos que la reorganización en tabs había dejado lugar para. Caen en la tab **Estado**, que queda en 2×2: batería ↔ salud, gabinete ↔ WiFi.
 
@@ -49,6 +51,7 @@ Era la premisa a corregir. De noche coinciden en **0,09–0,19 °C, plano los 7 
 - **Un solo hue para las dos sondas**, separadas por peso (2,2 px sólida contra 1,2 px punteada al 50%). Un tinte más claro se probó primero y **leía como un segundo color** —que es justo la afirmación que no queremos hacer— y encima no se veía subordinado: sobre fondo oscuro un rojo más claro es *más* prominente, no menos.
 - **El punto de rocío no entró como cuarta línea.** El margen midió 5,8–8,0 °C toda la semana; una línea entera para algo que nunca pasa pesa más de lo que informa. Va como lectura en el encabezado, con ícono y texto además del color.
 - **RSSI como banda, no como línea.** Dos semanas de medias diarias entran en **4,5 dB** — la media sola dibuja una horizontal. Lo que hace fallar un publish son los malos momentos, y esos viven en el min/máx de cada ventana (p05 = −73 dBm contra media −67,7).
+  > Consecuencia de las dos etapas, visible en el payload desplegado: el min/máx de la banda es el del **minuto** más bajo/alto, no el de la muestra suelta más baja/alta. En ciclo normal (~1 muestra por minuto) son lo mismo y los valores salen enteros —`-69`, `-70`, `-75`—; durante una sesión live (12 muestras por minuto) el minuto promedia y aparecen fraccionarios —`-71,25`, `-68,42`—, con la banda apenas más angosta que los extremos crudos. Es el precio de que cada minuto valga lo mismo, y es el correcto: un pico de 5 s no debería ensanchar la banda de una hora entera.
 - **Dos gráficos apilados y no dos ejes** en la tarjeta del gabinete. Dos escalas en un plot dejan inferir cruces que son artefacto de dónde se fijó cada escala.
 - **El eje de humedad va padeado alrededor del dato**, no de 0 a 100: la caja nunca salió de 45–70% y un eje anclado en cero gasta dos tercios del alto en estados que no puede alcanzar mientras aplasta el movimiento que sí hay.
 - La paleta pasó el validador en todo lo que decide legibilidad (**ΔE 20,6 protanopía, 30,1 visión normal, contraste ≥3:1**). El único FAIL es la banda de luminosidad del sistema de referencia, y **la app entera está fuera de esa banda** — cambiar sólo estos dos gráficos los habría desacoplado del resto.
@@ -80,7 +83,7 @@ Se ve *exactamente* igual que un gráfico sin datos, que es por qué no se detec
 
 ## ✅ Service mode en tabs — DESPLEGADA (2026-08-20)
 
-**La Pi corre frontend `1.12.0` y backend `1.9.0`.** Confirmado por las tres vías de siempre: el hash del bundle servido (`index-BSn1Z00V.js` y `index-CDtc7Tlv.css`, idénticos al build local), la versión embebida en ese bundle (`1.12.0`) y el endpoint de versión (`{"version":"1.9.0"}`). **El firmware no se tocó: sigue en `1.18.0`.**
+**Al cerrar esta tanda la Pi corría frontend `1.12.0` y backend `1.9.0`** — superado desde el 2026-08-21 por la tanda de gráficos de arriba (`1.13.0` / `1.10.0`). Confirmado por las tres vías de siempre: el hash del bundle servido (`index-BSn1Z00V.js` y `index-CDtc7Tlv.css`, idénticos al build local), la versión embebida en ese bundle (`1.12.0`) y el endpoint de versión (`{"version":"1.9.0"}`). **El firmware no se tocó: sigue en `1.18.0`.**
 
 > **Los dos podían desplegarse por separado** — `normalCycleSec` es aditivo y el frontend cae a su `FALLBACK_CYCLE_SEC` contra un backend viejo, probado contra el `1.8.0` de la Pi. Se desplegaron juntos igual.
 
