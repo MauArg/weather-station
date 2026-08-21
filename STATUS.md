@@ -4,6 +4,97 @@
 
 _Última actualización: 2026-08-21_
 
+## ✅ Vistas de detalle por indicador y tendencia barométrica — CÓDIGO TERMINADO, FALTA DESPLEGAR (2026-08-21)
+
+> ⚠️ **La Pi corre frontend `1.13.0` y backend `1.10.0`.** Todo commiteado, pusheado y bumpeado a **frontend `1.14.0` / backend `1.11.0`**, pero **sin rebuildear ni publicar imágenes**.
+>
+> **Los dos se pueden desplegar por separado, pero degradan distinto.** Todo lo nuevo del backend es aditivo, así que un frontend `1.13.0` contra el `1.11.0` simplemente ignora los campos. Al revés, el `1.14.0` contra el backend viejo pierde tres cosas y no rompe ninguna: el badge de tendencia no aparece (sin `pressureTrend` no se renderiza), el gráfico de marea muestra "sin datos", y la serie de rocío queda vacía en su gráfico mientras el resto del modal anda. Conviene desplegar los dos.
+
+La reorganización que Mau planteó: **Home = lo que se mira de un vistazo, modal = el detalle ampliado**. Las cuatro tarjetas (T/H/P/PR) abren una vista dedicada, y las tarjetas se "descargaron" de todo lo que pedía comparar dos números.
+
+### 🔑 El hallazgo que decidió la mitad del trabajo: la marea atmosférica
+
+La presión tiene un ciclo diario grande, regular y **que no es tiempo** — la marea semidiurna S2 con su componente diurna, movida por el calentamiento solar de la atmósfera. Medida sobre **119 días locales completos** de esta estación:
+
+| hora local | offset (hPa) | |
+|---|---|---|
+| 00:00 | **+1,263** | máximo |
+| 06:00 | −0,497 | mínimo secundario |
+| 10:00 | +0,693 | máximo secundario |
+| 16:00 | **−1,677** | mínimo |
+
+**2,94 hPa de pico a pico, todos los días, en horario.** La forma de manual: máximos cerca de 10 y 22 local, mínimos cerca de 04 y 16.
+
+La consecuencia es todo el punto. El cambio horario mediano es 0,387 hPa/h y **la marea sola aporta ~0,46 hPa/h** en la caída de la tarde y la subida de la noche. Un badge sin corregir diría *bajando* todas las tardes y *subiendo* todas las noches pasara lo que pasara — un reloj caro. Corregirla baja la mediana horaria a 0,268 y la de 3 h de 1,100 a **0,679 hPa**: cerca de un tercio de lo que un indicador ingenuo reportaría como tiempo es marea.
+
+**No hay fallback sin corregir, a propósito.** Si no hay climatología el par sale del payload y la tarjeta no muestra tendencia.
+
+### ⚠️ Datos de presión corruptos en el histórico — explicados
+
+Lecturas de **14031, 5709, 2484 y 624 hPa**. El **1,1%** de las medias horarias de cinco meses cae fuera de rango físico, **once de ellas el 2026-06-28** (ese día entero tiene mediana de 981 hPa contra los ~926 normales).
+
+**Causa, según Mau: cold joints de la primera versión del nodo en perfboard. Ya resuelto** — y los datos lo confirman: los outliers van del 15/4 al **3/7** y no hay ninguno después.
+
+No es académico: un solo 14031 arrastra la media de ese día ~580 hPa, y **la primera climatología que calculé, sin filtro, reportaba una "marea" de 109 hPa con pico a las 17**. Absurda a simple vista, que es lo único que la delató. De ahí el filtro de plausibilidad en `pressuretrend`, deliberadamente ancho (850–1000 hPa): separa lo físicamente imposible de lo inusual, no ajusta a lo que esta estación registró.
+
+> Dos hipótesis que descarté midiendo, para que nadie las re-derive: **no** hay cambio de régimen en el campo (las medianas diarias corren 908–938 hPa los cinco meses, así que `pressure_hpa` siempre fue presión de estación), y mi primer método de climatología —media móvil por índice— estaba mal: andaba sobre 14 días continuos y se rompía sobre 5 meses porque cruzaba los ~600 huecos horarios. Ahora corta por día local.
+
+### El punto de rocío sí podía tener gráfico
+
+La premisa de arranque era que no, por no estar almacenado. Es una **función pura de T y HR**, las dos guardadas desde marzo, así que la serie histórica se reconstruye entera. Sale por `internal/dewpoint`, la única implementación, para que no pueda discrepar con la lectura en vivo.
+
+Va como puntero y no como float: **0 °C es un rocío corriente acá** (mediana 0,2 sobre la quincena), así que plegar una lectura ausente a 0,0 pondría un punto plausible y equivocado en el medio del dato.
+
+Los umbrales salieron de los datos, no de un manual:
+
+- **El umbral clásico de niebla no servía.** El de manual es margen < 1 °C; acá dispara **0,0% del tiempo** — el margen nunca bajó de **1,31 °C** en dos semanas. Es el mismo hecho que la vista de humedad ve desde el otro lado cuando topa en 91%. La línea que informa está a **2 °C, 20% del tiempo**.
+- **El rocío está bajo cero el 48% del tiempo**: no es un caso borde, y significa que lo que se formaría es escarcha.
+
+### Otros números que decidieron contenido
+
+- **Humedad**: mediana 77,6%, p75 84,8%, así que el umbral de "aire húmedo" quedó en **80%** — parte la ventana cerca de 45/55, que es lo que hace que la cifra informe. El máximo de 91,1% de la quincena **es real, no un techo del sensor**: los valores se acercan de forma continua y todos distintos.
+- **Temperatura**: la amplitud diaria promedia **sólo días completos** (≥20 horas). Las ventanas casi siempre arrancan y terminan a mitad de día, y un día parcial subestima su propia amplitud — promediarlos hacía la cifra una propiedad de cuándo miraste.
+
+### La agregación en dos etapas, ahora también en la historia del dashboard
+
+`1.10.0` lo arregló para los sparklines de service mode y dejó afuera las dos consultas de historia. Medido sobre 14 días, una etapa contra dos:
+
+| ventana | temperatura | presión |
+|---|---|---|
+| 15 min (historia reciente) | media 0,036 · **máx 0,704 °C** | media 0,015 · máx 0,375 hPa |
+| 1 h (vista de día) | media 0,070 · **máx 1,612 °C** | media 0,021 · máx 0,619 hPa |
+
+**1,6 °C en la vista de día es lo que decidió.** Y 0,375 hPa es del mismo orden que el movimiento real de una hora, así que la tendencia no podría bandearse por encima de su propio artefacto. Cuesta **17% en el peor caso** (14 d pasó de 7,57 a 8,83 s).
+
+> Las ventanas **no** se escalan a un presupuesto de puntos como `windowMinFor` hace para los sparklines. Aquellos gastan 150 puntos en dibujar una forma; estos gráficos se leen por sus extremos, y una ventana más ancha reportaría el máximo de un promedio de dos horas como el máximo.
+
+### Decisiones de vista
+
+- **Modal sobre `<dialog>` nativo**, como `ConfirmDialog`: focus trap, Escape y fondo inerte vienen con el elemento. Los hijos **no** se renderizan con el modal cerrado — un `ResponsiveContainer` adentro de un `display:none` mide cero, la misma pared que las tabs de service mode.
+- **El toolbar vive afuera del cuerpo que scrollea.** Adentro y sticky, la fila de tarjetas asomaba por encima y se leía como dos filas superpuestas.
+- **Los extremos de hoy son una línea, no tarjetas.** Corren desde medianoche local y los de la ventana no: a 24 h se parecen y nunca son iguales, a 7 d no tienen nada que ver (11,7 °C contra 25,1 el mismo día). Como tarjetas se leían como más de lo mismo diciendo algo de otro alcance.
+- **El gráfico de marea usa la climatología del backend**, no una calculada sobre la ventana. Dibujarla localmente fue el primer intento y salió con el mínimo cerca de las 04 en vez de las 16 — parecía una marea y era el registro de qué frentes cruzaron esa quincena. `MinDaysForClimatology` vale 30 por eso.
+- **El detalle de rocío no muestra amplitud diaria.** La temperatura oscila porque sale y se pone el sol; el rocío es una propiedad de la masa de aire y su amplitud mide sobre todo si pasó un frente.
+- **El switch QNH/estación se mudó al modal.** Era la colisión de clicks que la tarjeta tenía: dos targets propios y volverla clickeable entera hacía que el caption hiciera una cosa y 3 px a la izquierda otra. Con el switch afuera, el mecanismo `variants` de `StatCard` quedó sin usuarios y se fue.
+
+### Verificado
+
+- **Contra InfluxDB de producción** con backend local: climatología desde 2714 medias horarias, marea **2,98 hPa** pico a pico. `pressuretrend.Build` corrido sobre las 2993 medias reales **reproduce el cálculo independiente en awk hasta el último dígito en las 24 horas**.
+- **Rocío a mano**: T=10,68 °C con 67,6% da 4,94 °C, coincidente.
+- `go build`, `go vet`, `go test` (10 paquetes), `npm run lint` y `npm run build` limpios. Los 4 archivos que marca `gofmt` son preexistentes.
+- **Paridad de claves EN/ES** en los dos namespaces, consola limpia en ambos idiomas.
+- **0 desborde horizontal** a 390 y 1568 px en las cuatro vistas.
+- El modal cierra con `display:none` y el cuerpo vacío; el switch propaga a la tarjeta y a los extremos de hoy (1.026,1 → 934,8 hPa).
+
+### Deuda anotada
+
+- **`PORT` es nuevo en el backend** (default 8080, sin cambios para Docker). Existe porque el 8080 de esta máquina lo tiene un proceso java ajeno al proyecto.
+- **El día 2026-06-28 sigue corrupto en InfluxDB.** Hoy no molesta porque el rango máximo del dashboard es 14 d y el filtro de la climatología lo descarta, pero está ahí.
+- **La query de 14 d tarda 8,8 s.** El `every` de la historia es fijo, así que a más historia en el bucket más caro el mismo resultado. `windowMinFor` lo arreglaría al costo de perder resolución en los extremos — la decisión está tomada al revés a propósito, pero conviene revisarla si sigue subiendo.
+- **La grilla de tarjetas del detalle cae 5+1 en desktop** cuando una vista tiene 6. Hoy ninguna las tiene; si alguna vuelve a crecer, aparece.
+
+> 🔎 **Trampa del entorno, ya pisada dos veces**: `sed -i` y `perl -i` reemplazan el archivo por rename y el watcher de Vite se pierde el cambio — sirve un módulo mezclado, con parte de la edición aplicada y parte no, y el `?t=` congelado. Se diagnostica con `curl` al módulo comparando contra el disco, y se arregla reiniciando el dev server. Para JSX conviene editar con herramientas que escriban en el lugar.
+
 ## ✅ Gráficos del gabinete y de señal WiFi — DESPLEGADA (2026-08-21)
 
 > ✅ **En producción: frontend `1.13.0` / backend `1.10.0`.** Firmware sin tocar en `1.18.0`.
