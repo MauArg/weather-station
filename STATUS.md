@@ -2,7 +2,68 @@
 
 > Actualizar este archivo al final de cada sesión de trabajo relevante. Es el punto de partida para la siguiente conversación — ver política en [`CLAUDE.md`](./CLAUDE.md).
 
-_Última actualización: 2026-08-21_
+_Última actualización: 2026-09-06_
+
+## 🔍 Revisión del punto de rocío: la fórmula está bien, la climatología de la quincena no (2026-09-06)
+
+> Frontend **1.14.1** (sin desplegar aún). Backend y firmware sin tocar.
+
+Mau preguntó por qué las líneas de temperatura y punto de rocío **nunca se cruzan**, habiendo visto formarse rocío: ¿la ecuación está mal, o hay un problema de sensores? Ninguna de las dos.
+
+### La fórmula es correcta — verificada, no supuesta
+
+`internal/dewpoint` (Magnus, 17,27 / 237,3) contrastada contra la inversión numérica de **Buck (1996)**, la referencia moderna de presión de vapor de saturación: **desvío máximo 0,049 °C** en todo el rango −5…30 °C × 40…100% HR. El SHT31 aporta ±2% de HR, que ya son ±0,3 °C de rocío — la fórmula aporta seis veces menos error que el sensor.
+
+También verificado el emparejamiento, que es donde estas cosas se rompen: `temperature_c` y `humidity_pct` salen **los dos del SHT31** (`sensors.cpp:188-189`), sin mezclar la T del BMP085. Una HR sólo significa algo con la temperatura a la que se midió.
+
+### Cruzarse es imposible, y no es una propiedad del sitio
+
+HR ≤ 100% ⇒ Trocío ≤ T, siempre. Ya hay un test que lo fija (`TestCelsiusNeverExceedsAirTemperature`). **Lo que informa es el ancho de la franja, no un cruce que no puede ocurrir.**
+
+Y el rocío no espera a que se junten: **se forma sobre superficies, no en el aire**. Pasto y chapa radian a un cielo nocturno mucho más frío que el aire y quedan **3-5 °C por debajo** en noche despejada y calma, así que llegan al punto de rocío con el aire todavía lejos. Margen de 2-4 °C a 1,5 m y pasto mojado abajo son la misma noche.
+
+### La quincena no era la estación
+
+Los umbrales de las vistas de rocío y humedad se habían calibrado sobre **una quincena que resultó inusualmente seca**. Recalculado sobre **5,5 meses del InfluxDB del NAS** (13.399 medias de 15 min, 25/03 → 06/09, la misma grilla que sirve `recentWindowMin`):
+
+| | quincena | 5,5 meses |
+|---|---|---|
+| piso del margen T−Trocío | 1,31 °C | **0,41 °C** |
+| margen < 1 °C (línea clásica de niebla) | 0,0% | **8,2% del tiempo** |
+| margen < 2 °C | 20% | **40,3%** |
+| techo de HR | 91,1% | **97,29%** |
+| rocío bajo cero | 48,3% | **20,4%** |
+| mediana de HR | 77,6% | 83,5% |
+
+Por noche (141 noches con datos): el mínimo nocturno baja de 2 °C en el **89%** de las noches y de 1 °C en el **26%**. Las líneas sí se pegan — la quincena simplemente no tenía ninguna de esas noches.
+
+### La evidencia de que los sensores miden bien
+
+Tasa de enfriamiento nocturno según el margen, sobre todo el registro:
+
+| margen | dT/dt |
+|---|---|
+| 3–6 °C | −0,78 °C/h |
+| 1,5–3 °C | −0,48 °C/h |
+| 0,75–1,5 °C | −0,40 °C/h |
+| < 0,75 °C | −0,385 °C/h |
+
+**El enfriamiento se frena a la mitad al acercarse a saturación**: es el freno del calor latente, la firma física del aire saturando de verdad. Un sensor con offset fijo o un techo artificial no la produciría — la curva se vería igual en todos los rangos.
+
+Sobre el techo de 97,3%: dentro de la spec del SHT31, y aun asumiendo un sesgo seco de 3% **el rocío se movería 0,45 °C**. No explica un margen de 2-4 °C. La brecha es física, no instrumental.
+
+Descartado también que la agregación la ensanche: grilla de 15 min y de 60 min dan el mismo piso (0,41 vs 0,42 °C) y el mismo 8,2% bajo 1 °C — el margen se mueve despacio de noche.
+
+### Qué se cambió
+
+- **`DewPointDetail.jsx`**: el bloque que justificaba los umbrales decía que la línea de 1 °C "nunca puede disparar" — reescrito con los números de 5,5 meses. **`NEAR_C` sigue en 2 °C y `DAMP_C` en 5 °C**, ahora por una razón mejor: es la línea operativa de rocío y niebla, y parte el registro en tercios usables (40% cerca / 28% húmedo / 31% seco). El comentario de `FROST_C` pasa de 48,3% a 20,4%.
+- **JSDoc del componente**: explica por qué las líneas no pueden cruzarse y por qué el rocío se forma igual — la pregunta que originó todo esto, contestada donde se va a volver a hacer.
+- **`pairIntro` (es/en)**: decía *"cuando se juntan se forma rocío"*, que es justo la idea equivocada. Ahora dice que no se cruzan nunca y que el rocío se forma sobre superficies 3-5 °C más frías.
+- **`HumidityDetail.jsx`**: el techo de 91,1% pasa a 97,3% (y el dominio del eje, de 20-91 a 20-97). **`DAMP_PCT` se queda en 80%** — parte 57/43 sobre el registro real, y mover un número que se viene leyendo hace meses para ganar 6 puntos de balance no vale la pena.
+
+**Nada de esto toca el cálculo**: `internal/dewpoint` queda como estaba, porque está bien.
+
+---
 
 ## ✅ Vistas de detalle por indicador y tendencia barométrica — DESPLEGADA (2026-08-21)
 
@@ -50,9 +111,11 @@ Los umbrales salieron de los datos, no de un manual:
 - **El umbral clásico de niebla no servía.** El de manual es margen < 1 °C; acá dispara **0,0% del tiempo** — el margen nunca bajó de **1,31 °C** en dos semanas. Es el mismo hecho que la vista de humedad ve desde el otro lado cuando topa en 91%. La línea que informa está a **2 °C, 20% del tiempo**.
 - **El rocío está bajo cero el 48% del tiempo**: no es un caso borde, y significa que lo que se formaría es escarcha.
 
+> ⚠️ **Estos dos números salieron de una quincena seca y no eran de la estación — corregidos el 2026-09-06 sobre 5,5 meses.** El margen sí baja de 1 °C (8,2% del tiempo, piso 0,41 °C) y el rocío bajo cero es 20,4%, no 48%. Ver la sección de arriba.
+
 ### Otros números que decidieron contenido
 
-- **Humedad**: mediana 77,6%, p75 84,8%, así que el umbral de "aire húmedo" quedó en **80%** — parte la ventana cerca de 45/55, que es lo que hace que la cifra informe. El máximo de 91,1% de la quincena **es real, no un techo del sensor**: los valores se acercan de forma continua y todos distintos.
+- **Humedad**: mediana 77,6%, p75 84,8%, así que el umbral de "aire húmedo" quedó en **80%** — parte la ventana cerca de 45/55, que es lo que hace que la cifra informe. El máximo de 91,1% de la quincena **es real, no un techo del sensor**: los valores se acercan de forma continua y todos distintos. (Correcto en cuanto a que no hay clipping, pero 91,1% era el techo *de la quincena*: sobre 5,5 meses la HR llega a **97,3%** — ver la sección del 2026-09-06.)
 - **Temperatura**: la amplitud diaria promedia **sólo días completos** (≥20 horas). Las ventanas casi siempre arrancan y terminan a mitad de día, y un día parcial subestima su propia amplitud — promediarlos hacía la cifra una propiedad de cuándo miraste.
 
 ### La agregación en dos etapas, ahora también en la historia del dashboard
