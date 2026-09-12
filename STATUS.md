@@ -2,7 +2,37 @@
 
 > Actualizar este archivo al final de cada sesión de trabajo relevante. Es el punto de partida para la siguiente conversación — ver política en [`CLAUDE.md`](./CLAUDE.md).
 
-_Última actualización: 2026-09-06_
+_Última actualización: 2026-09-12_
+
+## Acceso remoto por Telegram + Cloudflare — gateway preparado (2026-09-12)
+
+Mau aprobó enlaces firmados de un solo uso, válidos 10 minutos, con sesión de
+navegador independiente de 10 minutos y acceso remoto de solo lectura.
+
+Configuración realizada por Mau y verificada durante la conversación:
+- Worker `weather-gateway`, dominio público `weather.astronet.com.ar`; aún sirve Hello World.
+- Origen `weather-origin.astronet.com.ar` por túnel local a nginx de la Pi en puerto 80.
+- Access Service Auth limitado al token `weather-worker-origin`.
+- `cloudflared` valida JWT para equipo `momochis` y AUD de la aplicación.
+- Config validada, servicio reiniciado sano. Origen sin credenciales: Access 403;
+  con service token: HTTP 200 y backend `1.11.0`.
+- Secrets del Worker guardados por Mau: ORIGIN_CLIENT_ID, ORIGIN_CLIENT_SECRET,
+  LINK_SIGNING_SECRET. Sus valores NO están en este repo ni fueron compartidos.
+- Telegram existente se integra mediante n8n (luces/rutinas del hogar).
+
+Nuevo directorio `weather-gateway/` en repo raíz: Worker, Durable Object SQLite,
+validación HMAC, cookies HttpOnly/Secure, redención atómica, proxy con allowlist
+de API meteorológica y comandos de prueba. Sin despliegue remoto.
+8 tests pasan (incluye workerd/Miniflare con SQLite real), y
+`wrangler deploy --dry-run` pasa. Dependencias fijadas en package-lock.json.
+
+Siguiente: login de Wrangler en la cuenta de Mau y despliegue guiado;
+probar un enlace real. También falta adaptar UI remota (ocultar mantenimiento,
+desactivar polling de service/state, mostrar expiración) y conectar n8n con
+allowlist de sender ID/chat privado y sin persistir tokens en ejecuciones.
+Backend/frontend/firmware no se modificaron en esta tanda.
+Ver `weather-gateway/README.md` para contrato de firma y límites.
+
 
 ## 🔍 Revisión del punto de rocío: la fórmula está bien, la climatología de la quincena no (2026-09-06)
 
