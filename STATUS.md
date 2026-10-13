@@ -2,7 +2,43 @@
 
 > Actualizar este archivo al final de cada sesión de trabajo relevante. Es el punto de partida para la siguiente conversación — ver política en [`CLAUDE.md`](./CLAUDE.md).
 
-_Última actualización: 2026-09-12_
+_Última actualización: 2026-10-12_
+
+## 📡 Exploración LoRa en `lora-lab` (fuera de este árbol) (2026-10-12)
+
+Mau compró 2× Heltec Wireless Tracker V1.2 (ESP32-S3 + SX1262, banda HF
+863–928) y un dongle Waveshare USB-TO-LoRa-HF (B) para evaluar LoRa como
+reemplazo del WiFi. Toda la experimentación vive en
+`D:/trabajo/my_projects/lora-lab/` (repo propio, sin remote): **no es parte
+de la estación todavía**. Detalle completo en su README.
+
+Lo que quedó medido:
+- **Enlace:** 917 MHz, SF9, 10 dBm. Con la distancia real de la estación
+  (~10 m, dos paredes) hay unos 70 dB de margen, y en 40 min con dos estaciones
+  hubo 0 pérdidas del enlace (solo 3 choques entre estaciones).
+- **El dongle interopera con las Heltec:** cabecera de 4 bytes descifrada;
+  `AT+REBOOT`, no `AT+EXIT`, para aplicar la configuración.
+- **PoC multi-estación:** el gateway es Python + dongle, con una cola de un
+  comando por estación (el análogo del retained de MQTT). Telemetría, ventana
+  RX tras cada uplink, comandos con ACK (`ping`, `int`, `svc`, `svcoff`,
+  `reboot`, `pwr`) y el service mode con presupuesto acumulado.
+- **Consumo:** dormida a 18.8 µA. Por ciclo, ~51 mA·s en SF9 y ~28 en SF7,
+  con una ventana RX de 600 ms. La estación WiFi está en ~112 mA·s por ciclo.
+
+⚠️ **Hallazgo que toca a esta estación (sin aplicar):** `RTC_DATA_ATTR` se
+reinicializa en `ESP.restart()`, y `RTC_NOINIT_ATTR` sobrevive (medido en el
+S3). `service_mode.cpp` y `live_mode.cpp` guardan su estado y sus acumuladores
+como `RTC_DATA_ATTR`, aunque los comentarios dicen que sobreviven reinicios.
+Lo probable es que después del OTA el camino de "resume" de service mode nunca
+se tome, y que el presupuesto acumulado se pierda. Falta confirmarlo en el C3
+con un reboot antes de migrarlo a NOINIT con magic, como ya hace `logging.cpp`.
+
+Siguiente (decisión de Mau): prueba de campo a 2.5 km con una Heltec y un power
+bank, para definir el SF. Arquitectura en evaluación: Pi 4 + dongle en una caja
+estanca a ~4 m, con árboles en el medio, y la estación remota en un campo con
+batería y panel solar. Para ponerla afuera conviene el dongle con TCXO (no la
+versión "B"). El dongle escucha un solo SF, así que todas las estaciones usan
+el mismo. En la estación remota el reposo pesa más que la radio.
 
 ## Acceso remoto por Telegram + Cloudflare — gateway preparado (2026-09-12)
 
