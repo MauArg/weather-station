@@ -16,7 +16,11 @@ El granizo del 2026-10-31 desconectó el cable de los sensores core y fisuró lo
 | 18:01–18:35 | Basura real del BMP085, por el mal contacto | 2309 hPa: 2223,92 + 85,18 |
 | Desde 16:50 | **BMP corrido ~8 hPa**: QNH 1003 contra 1011 de la estación alemana de Mau | Curva suave y plausible |
 
-⚠️ **Hasta recablear, la presión está mal y ningún filtro lo corrige.** El cociente QNH/estación pasó de 1,09778 (±0,0002) a ~1,093, y SHT31−BMP de +0,65 a +4,2 °C. Por eso el aviso `bmp_suspect` queda encendido, y es lo esperado. La presión desde esa hora no sirve para calibrar nada. La bornera de palanca se mojó, y el aviso debería apagarse solo al arreglarlo: **falta comprobarlo.**
+⚠️ **La presión del 31/10 16:50 al 01/11 ~10:00 ART no sirve para calibrar nada.** El cociente QNH/estación pasó de 1,09778 (±0,0002) a ~1,093, y SHT31−BMP de +0,65 a +4,2 °C. La bornera de palanca se mojó. El 01/11 Mau acomodó los cables, sin recablear: el cociente volvió a 1,09777, la lectura coincide con la estación alemana y `bmp_suspect` no se activa. El contacto sigue siendo provisorio.
+
+**Revisión antes del primer deploy (01/11), mismas versiones:** `Despike` pasó a mirar 10 lecturas por lado, porque la versión causal tomaba como referencia la basura al arrancar una racha. Reproducido sobre 19.122 minutos reales: 0 rechazos antes de la falla. Se agregaron `*_implausible` para un sensor trabado, y las reglas quedaron sólo en `sensorqc` (`FluxBelievable()`). Probado en contenedores desechables contra Influx de producción, y 14 mutaciones detectadas.
+
+**Deuda:** el cliente de Influx corta a los 20 s y la vista de 14 d tarda ~13,8 s, así que el margen es de ~6 s y se achica con el bucket. La consulta de 30 d (tope de `hours`) ya da 500 por ese límite.
 
 **Qué se hizo** (detalle en `internal/sensorqc/` y en el `CLAUDE.md` del backend):
 - Lo ausente sigue ausente: `temperature`, `humidity`, `pressure`, `dewPoint` y los extremos diarios se omiten. Las tarjetas muestran "—" y el gráfico deja el hueco.
@@ -33,9 +37,7 @@ El granizo del 2026-10-31 desconectó el cable de los sensores core y fisuró lo
 
 **Verificado:** tests de Go mutados (las 7 mutaciones detectadas), lint y build. Edge headless con el backend local contra producción, a 390 y 1568 px y en es/en: sin errores de consola ni desborde. La ausencia actual se probó con datos interceptados. El front `1.14.1` contra el backend nuevo no rompe, pero con un sensor ausente muestra la unidad sola, así que conviene desplegar los dos juntos.
 
-**Sin verificar:** a 390 px sólo se probó `es` con mock y `en` con y sin mock. No se probó en producción.
-
-**Siguiente:** desplegar (el Docker local no respondió y no hay acceso SSH a la Pi configurado), y después recablear y confirmar que `bmp_suspect` se apaga y que el QNH se acerca a la referencia. `pressuretrend` todavía va a promediar la presión corrida en su climatología de 120 días: son horas sobre meses, pero conviene revisarlo si la reconstrucción tarda.
+**Siguiente:** desplegar (no hay acceso SSH a la Pi configurado desde esta PC), y recablear en la reconstrucción. La climatología de `pressuretrend` promedia unas 17 h de presión corrida sobre 120 días: es poco, y se va sola de la ventana.
 
 ## 📡 Exploración LoRa en `lora-lab` (fuera de este árbol) (2026-10-12)
 
