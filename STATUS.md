@@ -2,7 +2,40 @@
 
 > Actualizar este archivo al final de cada sesión de trabajo relevante. Es el punto de partida para la siguiente conversación — ver política en [`CLAUDE.md`](./CLAUDE.md).
 
-_Última actualización: 2026-10-12_
+_Última actualización: 2026-11-01_
+
+## 🌩️ Granizo y lecturas no creíbles: backend `1.12.0` / frontend `1.15.0` (2026-11-01)
+
+> ⏳ **Commiteado y pusheado, SIN desplegar.** Firmware y base sin tocar.
+
+El granizo del 2026-10-31 desconectó el cable de los sensores core y fisuró los platos superiores. Mau va a reconstruir y a pasar a permanente lo provisorio de la V1.
+
+| Hora (ART) | Qué pasó | Qué mostraba el dashboard |
+|---|---|---|
+| 14:13–16:51 | Campos ausentes. **No hay ningún cero guardado** | 0 °C / 0 % / 85,1 hPa: `getFloat` plegaba a 0 y el modo QNH sumaba el offset |
+| 18:01–18:35 | Basura real del BMP085, por el mal contacto | 2309 hPa: 2223,92 + 85,18 |
+| Desde 16:50 | **BMP corrido ~8 hPa**: QNH 1003 contra 1011 de la estación alemana de Mau | Curva suave y plausible |
+
+⚠️ **Hasta recablear, la presión está mal y ningún filtro lo corrige.** El cociente QNH/estación pasó de 1,09778 (±0,0002) a ~1,093, y SHT31−BMP de +0,65 a +4,2 °C. Por eso el aviso `bmp_suspect` queda encendido, y es lo esperado. La presión desde esa hora no sirve para calibrar nada. La bornera de palanca se mojó, y el aviso debería apagarse solo al arreglarlo: **falta comprobarlo.**
+
+**Qué se hizo** (detalle en `internal/sensorqc/` y en el `CLAUDE.md` del backend):
+- Lo ausente sigue ausente: `temperature`, `humidity`, `pressure`, `dewPoint` y los extremos diarios se omiten. Las tarjetas muestran "—" y el gráfico deja el hueco.
+- Rango físico sobre lecturas crudas, antes de promediar.
+- `Despike` sólo para presión: mediana de 5 lecturas previas, 2 hPa, reinicio tras 10 min. Por eso la presión de la historia se agrega en Go.
+- QNH = estación × factor de altitud. Antes, una mala lectura movía toda la curva.
+- `sensorIssues` en `/weather/current`: `sht31_missing`, `bmp_missing` (5 min respecto de la telemetría más nueva), `bmp_suspect`.
+
+**Lo medido, para no re-derivarlo:**
+- Temperatura y humedad **no** llevan filtro de velocidad: los saltos reales llegan a ~2 °C/min y ~15 %/min, y el SHT31 no dio basura en todo el día.
+- Sobre 19.122 minutos, el umbral de 2 hPa no rechaza nada antes de la falla; 1,5 hPa rechaza 8 minutos reales. Sobre medias horarias da 54 falsos positivos de 334.
+- Contra Influx de producción, 31/10: mínimo de T de 0 a 9,71 °C; máximo de presión de hoy de 2583 a 923,75 hPa; ventana de las 18:15 de 1324 a 912,44 hPa. Antes de la tormenta, el mayor desvío de la presión a 24 h es 0,019 hPa, y T no cambia.
+- La query de 14 d subió de 11,9 a 13,6 s. Quedó por encima del tope de ~12 s del plan, pero la línea de base ya estaba en 11,9. Unificar lecturas con `toFloat()` da 15,2 s: **es peor.**
+
+**Verificado:** tests de Go mutados (las 7 mutaciones detectadas), lint y build. Edge headless con el backend local contra producción, a 390 y 1568 px y en es/en: sin errores de consola ni desborde. La ausencia actual se probó con datos interceptados. El front `1.14.1` contra el backend nuevo no rompe, pero con un sensor ausente muestra la unidad sola, así que conviene desplegar los dos juntos.
+
+**Sin verificar:** a 390 px sólo se probó `es` con mock y `en` con y sin mock. No se probó en producción.
+
+**Siguiente:** desplegar (el Docker local no respondió y no hay acceso SSH a la Pi configurado), y después recablear y confirmar que `bmp_suspect` se apaga y que el QNH se acerca a la referencia. `pressuretrend` todavía va a promediar la presión corrida en su climatología de 120 días: son horas sobre meses, pero conviene revisarlo si la reconstrucción tarda.
 
 ## 📡 Exploración LoRa en `lora-lab` (fuera de este árbol) (2026-10-12)
 
