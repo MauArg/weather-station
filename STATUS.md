@@ -31,6 +31,7 @@ _Última actualización: 2026-11-07_
     - Mínima de **−7,0 °C**, con 39 días bajo 0 °C. **El corte de carga por frío es obligatorio.**
     - Los 59–83 °C de mayo y junio en `ds18b20_c` son basura de la época de juntas frías.
   - Hay pads NC de la huella de la Heltec debajo de la antena WiFi, y el keepout no cubre B.Cu.
+- **Cambio a PCBA de JLC (2026-11-07):** todo el SMD en top, ensamblado Economic; Mau suelda sólo el THT. Sin módulos breakout. Satélites `sat_aire` (SHT45 + **BMP581**, porque el BMP390 está sin stock en JLC) y `sat_veleta` (AS5600). BOM con números LCSC en el §9 del doc: ~USD 80–85 la principal, ~USD 130–135 con las satélites, sin la PCB desnuda ni el flete. **Aduana: tope de 3 unidades de la misma especie por envío courier.**
 - **Siguiente:**
   - Prueba del **ULP en lora-lab**, que bloquea congelar la PCB.
   - Continuidad del power-path de la V1.2 contra el esquemático V0.5.
