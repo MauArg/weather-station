@@ -2,7 +2,42 @@
 
 > Actualizar este archivo al final de cada sesión de trabajo relevante. Es el punto de partida para la siguiente conversación — ver política en [`CLAUDE.md`](./CLAUDE.md).
 
-_Última actualización: 2026-11-01_
+_Última actualización: 2026-11-07_
+
+## 🛠️ Nodo V2 sobre Heltec Wireless Tracker — diseño tentativo (2026-11-07)
+
+> Diseño, sin esquemático todavía. Fuente: `weather-station-station-iot/diseno_nodo_v2.md`, que cruza los análisis de tres agentes (firmware/GPIO, PCB, energía/componentes).
+
+- **Decidido por Mau:**
+  - Heltec Wireless Tracker V1.2, con el **TFT soldado**.
+  - Una sola PCB de 2 capas, de JLC/PCBWay, soldada a mano.
+  - El mismo diseño para la casa y para el campo a 2,5 km.
+  - **Viento continuo** y veleta **AS5600**.
+  - **Todo GX12-4** en la base de la caja.
+  - Caja de ~15×20 cm útiles, a medir.
+- **Propuesta:**
+  - La batería entra por JP3 de la Heltec, sin step-up.
+  - CN3722 integrado, con NTC y Vfloat de 4,1 V, más un header de respaldo para el módulo CN3791.
+  - INA226.
+  - Rails high-side con TPS22917.
+  - Un I2C (GPIO26/37) con un repetidor que aísla el segmento exterior.
+  - ULP-FSM para contar anemómetro y pluviómetro dormido (~170 µA).
+  - VEML7700 en lugar del LDR; SHT45, BMP390 y SHT40-BD1B.
+- **Datos que no conviene re-derivar:**
+  - **CE6260 (LDO de la Heltec):** Iq 6 µA, dropout de 120 mV a 100 mA y de 650 mV a 500 mA. Con TX LoRa regula hasta VBAT ≈ 3,55 V. Con WiFi hace falta ≥ 3,9 V, así que el OTA sólo va con VBAT ≥ 3,8 V. LiFePO4 queda descartada.
+  - **Caja (InfluxDB, desde 2026-04-12, sin verano todavía):**
+    - Máxima creíble de **40,0 °C**, el 27/09.
+    - Caja − aire de +4,8 °C (mediana) y +8,4 °C (p90).
+    - Mínima de **−7,0 °C**, con 39 días bajo 0 °C. **El corte de carga por frío es obligatorio.**
+    - Los 59–83 °C de mayo y junio en `ds18b20_c` son basura de la época de juntas frías.
+  - Hay pads NC de la huella de la Heltec debajo de la antena WiFi, y el keepout no cubre B.Cu.
+- **Siguiente:**
+  - Prueba del **ULP en lora-lab**, que bloquea congelar la PCB.
+  - Continuidad del power-path de la V1.2 contra el esquemático V0.5.
+  - I2C en GPIO26/37 con el TFT funcionando.
+  - Aislamiento del repetidor I2C.
+  - AS5600 por salida analógica.
+  - Medir la caja.
 
 ## 🌩️ Granizo y lecturas no creíbles: backend `1.12.0` / frontend `1.15.0` (2026-11-01)
 
