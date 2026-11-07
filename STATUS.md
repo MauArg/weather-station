@@ -32,7 +32,9 @@ _Última actualización: 2026-11-07_
     - Los 59–83 °C de mayo y junio en `ds18b20_c` son basura de la época de juntas frías.
   - Hay pads NC de la huella de la Heltec debajo de la antena WiFi, y el keepout no cubre B.Cu.
 - **Cambio a PCBA de JLC (2026-11-07):** todo el SMD en top, ensamblado Economic; Mau suelda sólo el THT. Sin módulos breakout. Satélites `sat_aire` (SHT45 + **BMP581**, porque el BMP390 está sin stock en JLC) y `sat_veleta` (AS5600). BOM con números LCSC en el §9 del doc: ~USD 80–85 la principal, ~USD 130–135 con las satélites, sin la PCB desnuda ni el flete. **Aduana: tope de 3 unidades de la misma especie por envío courier.**
+- **Respuestas del 07/11 a la tarde:** satélites en el mismo pedido; JP3 en la cara inferior de la Heltec, mirando a la PCB, así que va keepout o ventana fresada debajo; BMP581 recomendado (comparación en el §8b del doc, falta confirmarlo). **Ventana de la caja ambigua** ("parte media, delantera, asoma por abajo"): confirmar con una foto o croquis antes de ubicar el VEML7700 (vista lateral). Los datasheets bajados por los agentes quedaron en `hardware-agents/fuentes/datasheets/`. El proyecto KiCad `kicad-weather_station_v2/` sigue sin commitear (trabajo en curso de Mau).
 - **Siguiente:**
+  - Mau arranca el esquemático en KiCad el fin de semana: estructura de hojas del §6 del doc, serigrafía a 1,0 mm, huella de la Heltec corregida.
   - Prueba del **ULP en lora-lab**, que bloquea congelar la PCB.
   - Continuidad del power-path de la V1.2 contra el esquemático V0.5.
   - I2C en GPIO26/37 con el TFT funcionando.
